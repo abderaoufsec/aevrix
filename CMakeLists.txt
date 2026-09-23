@@ -53,13 +53,23 @@ enable_testing()
 # =============================================================================
 # The aevrix executable - the HTTP server binary
 # Initially contains placeholder code, will be replaced with actual implementation
+# 
+# Phase 2 adds:
+# - src/tcp_listener.cpp (TCP socket management)
+# - Uses UniqueFd for RAII socket management
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
+    src/tcp_listener.cpp
 )
 
 # Ensure main executable can find aevrix headers
 target_include_directories(aevrix PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Link Windows socket library on Windows
+if(WIN32)
+    target_link_libraries(aevrix PRIVATE ws2_32)
+endif()
 
 # =============================================================================
 # Test Executable
@@ -76,6 +86,11 @@ add_executable(aevrix_tests
 
 # Ensure tests can find aevrix headers
 target_include_directories(aevrix_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Link Windows socket library on Windows (for test file operations)
+if(WIN32)
+    target_link_libraries(aevrix_tests PRIVATE ws2_32)
+endif()
 
 # =============================================================================
 # Test Registration
