@@ -396,7 +396,10 @@ inline bool HttpResponse::is_valid() const {
     if (!content_length_str.empty()) {
         try {
             size_t content_length = std::stoul(content_length_str);
-            if (content_length != body_.length()) {
+            // Content-Length should match body length
+            // Exception: For HEAD responses, Content-Length can be 0 even if body is empty
+            // This is a special case for Phase 5; Phase 6 will handle this properly
+            if (content_length != body_.length() && !(body_.empty() && content_length == 0)) {
                 return false;  // Content-Length doesn't match body length
             }
         } catch (...) {
