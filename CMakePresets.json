@@ -19,7 +19,7 @@
     {
       "name": "debug-win",
       "displayName": "Debug (Windows)",
-      "generator": "Visual Studio 17 2022",
+      "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -48,7 +48,7 @@
     {
       "name": "release-win",
       "displayName": "Release (Windows)",
-      "generator": "Visual Studio 17 2022",
+      "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
