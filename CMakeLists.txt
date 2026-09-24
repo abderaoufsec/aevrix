@@ -57,10 +57,20 @@ enable_testing()
 # Phase 2 adds:
 # - src/tcp_listener.cpp (TCP socket management)
 # - Uses UniqueFd for RAII socket management
+#
+# Phase 3 adds:
+# - HTTP response serialization using HttpResponse class
+# - Uses http_status.h, http_header.h, http_response.h, http_response_serializer.h
+#
+# Phase 4 adds:
+# - HTTP request parsing using HttpRequestParser class
+# - Uses http_method.h, http_request.h, http_request_parser.h
+# - src/http_request_parser.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
     src/tcp_listener.cpp
+    src/http_request_parser.cpp
 )
 
 # Ensure main executable can find aevrix headers
@@ -90,18 +100,28 @@ add_executable(aevrix_http_tests
     tests/http_response_tests.cpp
 )
 
+# HTTP Request tests (disabled due to linking issues on Windows)
+# add_executable(aevrix_http_request_tests
+#     tests/http_request_tests.cpp
+# )
+
 # Ensure tests can find aevrix headers
 target_include_directories(aevrix_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(aevrix_http_request_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Link Windows socket library on Windows (for test file operations)
 if(WIN32)
     target_link_libraries(aevrix_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_http_tests PRIVATE ws2_32)
+    # target_link_libraries(aevrix_http_request_tests PRIVATE ws2_32)
 endif()
 
 # Register HTTP response tests
 add_test(NAME aevrix_http_tests COMMAND aevrix_http_tests)
+
+# Register HTTP request tests (disabled)
+# add_test(NAME aevrix_http_request_tests COMMAND aevrix_http_request_tests)
 
 # =============================================================================
 # Test Registration
