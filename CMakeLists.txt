@@ -77,20 +77,31 @@ endif()
 # The aevrix_tests executable - contains all unit and integration tests
 # Uses CTest framework for automated test execution
 # 
-# Currently contains UniqueFd tests from Phase 1
+# Phase 1: UniqueFd tests
+# Phase 3: HTTP response tests
 # Future phases will add more test files here
 # =============================================================================
 add_executable(aevrix_tests
     tests/unique_fd_tests.cpp
 )
 
+# HTTP Response tests (separate executable due to linking issues)
+add_executable(aevrix_http_tests
+    tests/http_response_tests.cpp
+)
+
 # Ensure tests can find aevrix headers
 target_include_directories(aevrix_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Link Windows socket library on Windows (for test file operations)
 if(WIN32)
     target_link_libraries(aevrix_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_http_tests PRIVATE ws2_32)
 endif()
+
+# Register HTTP response tests
+add_test(NAME aevrix_http_tests COMMAND aevrix_http_tests)
 
 # =============================================================================
 # Test Registration
