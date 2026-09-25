@@ -66,11 +66,17 @@ enable_testing()
 # - HTTP request parsing using HttpRequestParser class
 # - Uses http_method.h, http_request.h, http_request_parser.h
 # - src/http_request_parser.cpp
+#
+# Phase 6 adds:
+# - Static file serving using StaticFileServer class
+# - Uses static_file_server.h
+# - src/static_file_server.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
     src/tcp_listener.cpp
     src/http_request_parser.cpp
+    src/static_file_server.cpp
 )
 
 # Ensure main executable can find aevrix headers

@@ -2,18 +2,20 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 5, we implement the full request/response pipeline with:
-// - Partial reads (handling requests arriving in multiple recv() calls)
-// - Partial writes (handling responses requiring multiple send() calls)
-// - Proper error responses (404 for non-existent paths)
-// - Continuous server operation (no connection limit)
+// In Phase 6, we implement static file serving with:
+// - Command-line argument parsing for --root
+// - Secure file serving from document root
+// - Path validation to prevent directory traversal
+// - MIME type detection for proper content serving
+// - 404 Not Found for non-existent files
+// - 403 Forbidden for directory access and path traversal attempts
 //
-// Current Implementation (Phase 5):
+// Current Implementation (Phase 6):
 // - Create TCP listener on 127.0.0.1:8080
 // - Accept incoming connections continuously
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
-// - Generate structured HTTP responses (including 404 for unknown paths)
+// - Serve static files using StaticFileServer
 // - Send responses with partial write handling
 // - Close the connection
 //
@@ -22,9 +24,9 @@
 // - Phase 2: TCP listener with socket/bind/listen/accept
 // - Phase 3: Structured HTTP response serialization
 // - Phase 4: HTTP request parsing with HttpRequestParser
+// - Phase 5: Full request/response pipeline with partial I/O
 //
 // Future Phases Will Add:
-// - Phase 6: Static file serving
 // - Phase 7: Keep-alive connections
 // - Phase 8: Non-blocking I/O with epoll
 // =============================================================================
@@ -34,9 +36,11 @@
 #include "aevrix/http_response.h"
 #include "aevrix/http_response_serializer.h"
 #include "aevrix/http_request_parser.h"
+#include "aevrix/static_file_server.h"
 #include <iostream>
 #include <string>
 #include <cstdint>  // For uint16_t
+#include <vector>   // For command-line arguments
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -48,6 +52,50 @@
 
 // Use the http namespace for convenience
 using namespace aevrix::http;
+
+/**
+ * @brief Parse command-line arguments
+ * 
+ * Parses command-line arguments to extract configuration options.
+// Currently supports --root for specifying the document root directory.
+ * 
+ * @param argc Argument count
+ * @param argv Argument values
+ * @param document_root Output parameter for document root path
+ * @return true if parsing succeeded, false if there was an error
+ */
+bool parse_arguments(int argc, char* argv[], std::string& document_root) {
+    // Default document root
+    document_root = "./public";
+    
+    // Parse command-line arguments
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        
+        if (arg == "--root" || arg == "-r") {
+            // Next argument is the document root
+            if (i + 1 < argc) {
+                document_root = argv[++i];
+                std::cout << "Using document root: " << document_root << "\n";
+            } else {
+                std::cerr << "Error: --root requires a path argument\n";
+                return false;
+            }
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: " << argv[0] << " [OPTIONS]\n";
+            std::cout << "Options:\n";
+            std::cout << "  --root, -r PATH    Set document root directory (default: ./public)\n";
+            std::cout << "  --help, -h         Show this help message\n";
+            return false;
+        } else {
+            std::cerr << "Error: Unknown argument: " << arg << "\n";
+            std::cerr << "Use --help for usage information\n";
+            return false;
+        }
+    }
+    
+    return true;
+}
 
 /**
  * @brief Send data to a client socket with partial write handling
@@ -123,7 +171,7 @@ void send_error_response(int client_fd, StatusCode status, const std::string& me
  * - An error occurs
  * 
  * This is necessary because TCP is a stream protocol - a single HTTP request
- * may arrive in multiple recv() calls, especially for large requests or
+// may arrive in multiple recv() calls, especially for large requests or
 // due to network conditions.
  * 
  * @param client_fd The client socket descriptor
@@ -188,47 +236,60 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
 }
 
 /**
- * @brief Build an HTTP response based on the request
+ * @brief Build an HTTP response based on the request using static file serving
  * 
  * Generates an appropriate HTTP response based on the parsed request.
- * In Phase 5, we implement:
- * - 200 OK for GET requests to "/"
- * - 200 OK with no body for HEAD requests to "/"
- * - 404 Not Found for any other path
+ * In Phase 6, we implement:
+ * - Static file serving for GET requests
+ * - HEAD request support (200 OK with no body)
+ * - 404 Not Found for non-existent files
+ * - 403 Forbidden for directory access and path traversal attempts
  * - 405 Method Not Allowed for unsupported methods
  * 
- * Note: Phase 6 will implement static file serving, which will replace
-// the simple path-based logic with actual file system operations.
- * 
  * @param request The parsed HTTP request
+ * @param file_server The static file server instance
  * @return HttpResponse The structured HTTP response
  */
-HttpResponse build_response(const HttpRequest& request) {
+HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server) {
     // Check the method first
     if (request.method() == HttpMethod::GET || request.method() == HttpMethod::HEAD) {
-        // In Phase 5, we only support the root path "/"
-        // Phase 6 will implement static file serving for arbitrary paths
-        if (request.target() == "/") {
-            // Return 200 OK for root path
+        // Serve the file using StaticFileServer
+        auto [content, mime_type, status_code] = file_server.serve_file(request.target());
+        
+        if (status_code == 200) {
+            // File found and read successfully
             if (request.method() == HttpMethod::GET) {
-                HttpResponse response(StatusCode::OK, "Hello from Aevrix!");
-                response.set_header("Content-Type", "text/plain");
+                HttpResponse response(StatusCode::OK, content);
+                response.set_header("Content-Type", mime_type);
                 response.set_header("Server", "Aevrix/0.1.0");
                 response.set_connection_policy(ConnectionPolicy::Close);
                 return response;
             } else {
                 // HEAD request - return 200 OK with no body
                 HttpResponse response(StatusCode::OK);
-                response.set_header("Content-Type", "text/plain");
-                response.set_header("Content-Length", "0");  // HEAD responses have no body
+                response.set_header("Content-Type", mime_type);
+                response.set_header("Content-Length", std::to_string(content.length()));
                 response.set_header("Server", "Aevrix/0.1.0");
                 response.set_connection_policy(ConnectionPolicy::Close);
                 return response;
             }
-        } else {
-            // Return 404 Not Found for non-root paths
-            // Phase 6 will implement actual file serving
+        } else if (status_code == 404) {
+            // File not found
             HttpResponse response(StatusCode::NotFound, "Not Found");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(ConnectionPolicy::Close);
+            return response;
+        } else if (status_code == 403) {
+            // Forbidden (directory access or path traversal attempt)
+            HttpResponse response(StatusCode::Forbidden, "Forbidden");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(ConnectionPolicy::Close);
+            return response;
+        } else {
+            // Internal server error
+            HttpResponse response(StatusCode::InternalServerError, "Internal Server Error");
             response.set_header("Content-Type", "text/plain");
             response.set_header("Server", "Aevrix/0.1.0");
             response.set_connection_policy(ConnectionPolicy::Close);
@@ -250,15 +311,17 @@ HttpResponse build_response(const HttpRequest& request) {
  * @brief Handle a single client connection
  * 
  * Accepts a connection, reads the HTTP request (with partial read handling),
- * parses it, generates a response, and sends it (with partial write handling).
- * This is the Phase 5 implementation with proper I/O handling.
+// parses it, generates a response using static file serving, and sends it
+// (with partial write handling). This is the Phase 6 implementation with
+// static file serving.
  * 
  * The pipeline is:
- * socket → recv (loop) → parser → Request → handler → Response → serializer → send (loop)
+ * socket → recv (loop) → parser → Request → file_server → Response → serializer → send (loop)
  * 
  * @param client_fd The client socket descriptor
+ * @param file_server The static file server instance
  */
-void handle_connection(int client_fd) {
+void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
     std::cout << "Handling client connection...\n";
 
     try {
@@ -278,8 +341,8 @@ void handle_connection(int client_fd) {
         std::cout << "Target: " << request.target() << "\n";
         std::cout << "Headers: " << request.headers().size() << "\n";
 
-        // Build response based on request
-        HttpResponse response = build_response(request);
+        // Build response based on request using static file serving
+        HttpResponse response = build_response(request, file_server);
         
         // Serialize the response
         std::string serialized_response = HttpResponseSerializer::serialize(response);
@@ -315,23 +378,38 @@ void handle_connection(int client_fd) {
  * @brief Main entry point for the Aevrix HTTP server
  * 
  * Creates a TCP listener, accepts connections continuously, reads and parses HTTP
-// requests (with partial read handling), and handles them with structured HTTP
-// responses (with partial write handling). This is the Phase 5 implementation -
-// full request/response pipeline with proper I/O handling.
+// requests (with partial read handling), and handles them with static file serving
+// (with partial write handling). This is the Phase 6 implementation - static
+// file serving with security.
  * 
  * Usage:
- *   ./aevrix
+ *   ./aevrix --root ./public
  *   # Server will listen on 127.0.0.1:8080
- *   # Test with: curl http://127.0.0.1:8080/
- *   # Test 404 with: curl http://127.0.0.1:8080/does-not-exist
+ *   # Serve files from ./public directory
+ *   # Test with: curl http://127.0.0.1:8080/index.html
  * 
  * @return int Exit code (0 for success, non-zero for error)
  */
-int main() {
-    std::cout << "=== Aevrix HTTP Server - Phase 5 ===\n";
-    std::cout << "Full Request/Response Pipeline\n\n";
+int main(int argc, char* argv[]) {
+    std::cout << "=== Aevrix HTTP Server - Phase 6 ===\n";
+    std::cout << "Static File Serving\n\n";
 
     try {
+        std::cout << "Parsing arguments...\n";
+        // Parse command-line arguments
+        std::string document_root;
+        if (!parse_arguments(argc, argv, document_root)) {
+            std::cout << "Argument parsing failed\n";
+            return 1;
+        }
+
+        std::cout << "Attempting to create static file server with root: " << document_root << "\n";
+
+        // Create static file server
+        aevrix::StaticFileServer file_server(document_root);
+
+        std::cout << "Static file server created successfully\n";
+
         // Create TCP listener on localhost:8080
         // In future phases, this will be configurable via command-line arguments
         const std::string host = "127.0.0.1";
@@ -346,11 +424,11 @@ int main() {
         }
 
         std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
-        std::cout << "Full request/response pipeline with partial I/O handling\n";
+        std::cout << "Serving files from: " << file_server.document_root() << "\n";
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
-        // In Phase 5, this runs continuously (no connection limit)
+        // In Phase 6, this runs continuously (no connection limit)
         // Phase 8 will replace this with epoll-based event loop
         int connection_count = 0;
 
@@ -361,8 +439,8 @@ int main() {
             auto client_fd = listener.accept();
             
             if (client_fd.has_value()) {
-                // Handle the connection with full request/response pipeline
-                handle_connection(client_fd.value());
+                // Handle the connection with static file serving
+                handle_connection(client_fd.value(), file_server);
                 connection_count++;
                 std::cout << "Total connections handled: " << connection_count << "\n\n";
             } else {
