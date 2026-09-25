@@ -2,16 +2,13 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 8, we implement non-blocking I/O with epoll on Linux:
-// - Event-driven runtime using epoll (Linux) or select (Windows fallback)
-// - Non-blocking socket support
-// - Multiple connections handled efficiently without one thread per connection
-// - Proper handling of EAGAIN, EWOULDBLOCK, EINTR
-// - Keep-alive connections (from Phase 7)
-// - Static file serving (from Phase 6)
+// In Phase 9, we implement the connection state machine to make event-driven
+// behavior explicit and eliminate scattered "magic boolean" connection states.
 //
-// Current Implementation (Phase 8):
+// Current Implementation (Phase 9):
 // - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
+// - Use Connection class to manage connection state (input buffer, parser state,
+//   output buffer, keep-alive decision, timestamps, request ID)
 // - Use event loop to handle multiple connections efficiently
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
@@ -29,9 +26,11 @@
 // - Phase 5: Full request/response pipeline with partial I/O
 // - Phase 6: Static file serving with security
 // - Phase 7: Keep-alive connections
+// - Phase 8: Non-blocking I/O with epoll (Linux only)
+// - Phase 9: Connection state machine
 //
 // Future Phases Will Add:
-// - Phase 9: Connection state machine
+// - Phase 10: Timeouts and resource limits
 // =============================================================================
 
 #include "aevrix/tcp_listener.h"
@@ -40,6 +39,7 @@
 #include "aevrix/http_response_serializer.h"
 #include "aevrix/http_request_parser.h"
 #include "aevrix/static_file_server.h"
+#include "aevrix/connection.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -47,6 +47,15 @@
 #include <string>
 #include <cstdint>  // For uint16_t
 #include <vector>   // For command-line arguments
+#include <memory>   // For std::unique_ptr
+
+// Bring HTTP types into current namespace for readability
+using aevrix::http::HttpRequest;
+using aevrix::http::HttpResponse;
+using aevrix::http::HttpMethod;
+using aevrix::http::StatusCode;
+using aevrix::http::ConnectionPolicy;
+using aevrix::http::HttpRequestParser;
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -282,7 +291,7 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @brief Build an HTTP response based on the request using static file serving
  * 
  * Generates an appropriate HTTP response based on the parsed request.
- * In Phase 8, we implement:
+ * In Phase 9, we implement:
  * - Static file serving for GET requests
  * - HEAD request support (200 OK with no body)
  * - 404 Not Found for non-existent files
@@ -294,7 +303,7 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @param file_server The static file server instance
  * @return HttpResponse The structured HTTP response
  */
-HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server) {
+aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server) {
     // Check if client wants keep-alive
     bool keep_alive = wants_keep_alive(request);
     
@@ -372,40 +381,89 @@ HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer
  * @param client_fd The client socket descriptor
  * @param file_server The static file server instance
  */
+/**
+ * @brief Handle a single client connection with connection state management
+ * 
+ * Accepts a connection, reads the HTTP request (with partial read handling),
+// parses it, generates a response using static file serving, and sends it
+// (with partial write handling). In Phase 9, this function uses the Connection
+// class to manage connection state explicitly, eliminating scattered "magic
+// boolean" states.
+ * 
+ * The pipeline is:
+ * socket → recv (loop) → parser → Request → file_server → Response → serializer → send (loop)
+ * 
+ * With keep-alive:
+ * request 1 → response 1 → request 2 → response 2 → ... → close
+ * 
+ * @param client_fd The client socket descriptor
+ * @param file_server The static file server instance
+ */
 void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
-    std::cout << "Handling client connection...\n";
+    // Create Connection object to manage state
+    static uint64_t connection_counter = 0;
+    aevrix::Connection connection(client_fd, ++connection_counter);
+    
+    std::cout << "Handling client connection (ID: " << connection.id() << ")...\n";
 
     try {
         int request_count = 0;
         bool keep_alive = true;
         
+        // Set initial state
+        connection.set_state(aevrix::ConnectionState::Reading);
+        connection.set_read_state(aevrix::ReadState::Headers);
+        
         // Handle multiple requests on the same connection (keep-alive)
         while (keep_alive) {
             request_count++;
-            std::cout << "Processing request " << request_count << " on this connection\n";
+            connection.increment_request_id();
+            std::cout << "Processing request " << request_count << " on connection " << connection.id() << "\n";
+            
+            // Update activity timestamp
+            connection.update_activity();
             
             // Parse the HTTP request with partial read handling
-            HttpRequestParser parser;
-            
-            if (!receive_request(client_fd, parser)) {
+            if (!receive_request(client_fd, connection.parser())) {
                 // receive_request already handles error responses
                 std::cout << "Request " << request_count << " failed, closing connection\n";
+                connection.set_state(aevrix::ConnectionState::Closing);
+                break;
+            }
+
+            // Check if parsing completed
+            if (!connection.is_request_complete()) {
+                std::cerr << "Request parsing incomplete\n";
+                connection.set_state(aevrix::ConnectionState::Closing);
+                break;
+            }
+
+            // Check for parse errors
+            if (connection.has_parse_error()) {
+                std::cerr << "Request parsing error\n";
+                connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
 
             // Get the parsed request
-            const HttpRequest& request = parser.request();
+            const HttpRequest& request = connection.parser().request();
             
             std::cout << "Parsed request: " << request.request_line() << "\n";
             std::cout << "Method: " << aevrix::http::http_method_to_string(request.method()) << "\n";
             std::cout << "Target: " << request.target() << "\n";
             std::cout << "Headers: " << request.headers().size() << "\n";
 
+            // Evaluate keep-alive policy
+            connection.evaluate_keep_alive(request);
+            
             // Build response based on request using static file serving
             HttpResponse response = build_response(request, file_server);
             
+            // Set current response in connection
+            connection.set_current_response(response);
+            
             // Check if we should keep the connection alive
-            keep_alive = (response.connection_policy() == ConnectionPolicy::KeepAlive);
+            keep_alive = connection.keep_alive();
             std::cout << "Keep-alive: " << (keep_alive ? "yes" : "no") << "\n";
             
             // Serialize the response
@@ -413,29 +471,47 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
             
             if (serialized_response.empty()) {
                 std::cerr << "Failed to serialize response\n";
+                connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
 
             std::cout << "Sending response (" << serialized_response.length() << " bytes)...\n";
 
+            // Set writing state
+            connection.set_state(aevrix::ConnectionState::Writing);
+            connection.set_write_state(aevrix::WriteState::Body);
+
             // Send the response with partial write handling
             if (send_response(client_fd, serialized_response.c_str(), serialized_response.length())) {
                 std::cout << "Response sent successfully\n";
+                connection.set_write_state(aevrix::WriteState::Complete);
             } else {
                 std::cerr << "Failed to send response\n";
+                connection.set_write_state(aevrix::WriteState::Error);
                 break;
             }
+            
+            // Update activity timestamp
+            connection.update_activity();
             
             // If not keep-alive, break the loop
             if (!keep_alive) {
                 std::cout << "Connection will be closed after this response\n";
+                connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
+            
+            // Set to waiting state for next request
+            connection.set_state(aevrix::ConnectionState::Waiting);
+            connection.set_read_state(aevrix::ReadState::Idle);
+            connection.set_write_state(aevrix::WriteState::Idle);
             
             std::cout << "Waiting for next request on same connection...\n";
         }
         
-        std::cout << "Connection handled " << request_count << " request(s)\n";
+        std::cout << "Connection " << connection.id() << " handled " << request_count << " request(s)\n";
+        std::cout << "Connection age: " << connection.age().count() << "ms\n";
+        std::cout << "Time since last activity: " << connection.time_since_activity().count() << "ms\n";
 
     } catch (const std::exception& e) {
         std::cerr << "Exception in handle_connection: " << e.what() << "\n";
@@ -447,7 +523,8 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
     aevrix::UniqueFd client_unique_fd(client_fd);
     // client_unique_fd will automatically close the descriptor when it goes out of scope
     
-    std::cout << "Connection closed\n";
+    connection.set_state(aevrix::ConnectionState::Closed);
+    std::cout << "Connection " << connection.id() << " closed\n";
 }
 
 /**
@@ -468,11 +545,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 8 ===\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 9 ===\n";
 #ifdef __linux__
-    std::cout << "Non-Blocking I/O with epoll (Linux)\n\n";
+    std::cout << "Connection State Machine with epoll (Linux)\n\n";
 #else
-    std::cout << "Blocking I/O (Windows/Unix fallback for development)\n\n";
+    std::cout << "Connection State Machine (Windows/Unix fallback for development)\n\n";
 #endif
 
     try {
@@ -507,15 +584,16 @@ int main(int argc, char* argv[]) {
         std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
         std::cout << "Serving files from: " << file_server.document_root() << "\n";
 #ifdef __linux__
-        std::cout << "Using epoll event loop for non-blocking I/O\n";
+        std::cout << "Using connection state machine with epoll event loop\n";
 #else
-        std::cout << "Using blocking I/O (Windows/Unix fallback)\n";
+        std::cout << "Using connection state machine (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
 #endif
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
-        // Phase 8: Use epoll event loop on Linux, blocking loop on Windows/Unix
+        // Phase 9: Use epoll event loop on Linux, blocking loop on Windows/Unix
+        // Both paths now use the Connection class for explicit state management
         int connection_count = 0;
 
 #ifdef __linux__

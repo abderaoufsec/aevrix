@@ -76,6 +76,11 @@ enable_testing()
 # - Event loop with epoll on Linux, select on Windows
 # - Uses event_loop.h
 # - src/event_loop.cpp
+#
+# Phase 9 adds:
+# - Connection state machine
+# - Uses connection.h
+# - src/connection.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -83,6 +88,7 @@ add_executable(aevrix
     src/http_request_parser.cpp
     src/static_file_server.cpp
     src/event_loop.cpp
+    src/connection.cpp
 )
 
 # Ensure main executable can find aevrix headers
