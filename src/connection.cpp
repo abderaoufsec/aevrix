@@ -9,6 +9,7 @@
 #include "aevrix/http_request_parser.h"
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
+#include "aevrix/server_config.h"
 #include <iostream>
 #include <algorithm>
 
@@ -64,6 +65,70 @@ void Connection::evaluate_keep_alive(const HttpRequest& request) {
             std::cout << "Connection " << id_ << ": keep-alive disabled (HTTP/1.0 default)\n";
         }
     }
+}
+
+// =============================================================================
+// Timeout Checking (Phase 10)
+// =============================================================================
+
+bool Connection::has_header_timeout(const ServerConfig& config) const {
+    if (read_state_ != ReadState::Headers) {
+        return false;  // Only check when reading headers
+    }
+    
+    auto elapsed = time_since_activity();
+    if (elapsed.count() > static_cast<int64_t>(config.header_timeout_ms())) {
+        std::cout << "Connection " << id_ << ": header timeout (" 
+                  << elapsed.count() << " ms > " << config.header_timeout_ms() << " ms)\n";
+        return true;
+    }
+    
+    return false;
+}
+
+bool Connection::has_body_timeout(const ServerConfig& config) const {
+    if (read_state_ != ReadState::Body) {
+        return false;  // Only check when reading body
+    }
+    
+    auto elapsed = time_since_activity();
+    if (elapsed.count() > static_cast<int64_t>(config.body_timeout_ms())) {
+        std::cout << "Connection " << id_ << ": body timeout (" 
+                  << elapsed.count() << " ms > " << config.body_timeout_ms() << " ms)\n";
+        return true;
+    }
+    
+    return false;
+}
+
+bool Connection::has_keep_alive_timeout(const ServerConfig& config) const {
+    if (state_ != ConnectionState::Waiting) {
+        return false;  // Only check when in keep-alive waiting state
+    }
+    
+    auto elapsed = time_since_activity();
+    if (elapsed.count() > static_cast<int64_t>(config.keep_alive_timeout_ms())) {
+        std::cout << "Connection " << id_ << ": keep-alive timeout (" 
+                  << elapsed.count() << " ms > " << config.keep_alive_timeout_ms() << " ms)\n";
+        return true;
+    }
+    
+    return false;
+}
+
+bool Connection::has_write_timeout(const ServerConfig& config) const {
+    if (write_state_ != WriteState::Body && write_state_ != WriteState::Headers) {
+        return false;  // Only check when writing
+    }
+    
+    auto elapsed = time_since_activity();
+    if (elapsed.count() > static_cast<int64_t>(config.write_timeout_ms())) {
+        std::cout << "Connection " << id_ << ": write timeout (" 
+                  << elapsed.count() << " ms > " << config.write_timeout_ms() << " ms)\n";
+        return true;
+    }
+    
+    return false;
 }
 
 } // namespace aevrix

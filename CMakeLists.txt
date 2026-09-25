@@ -81,6 +81,11 @@ enable_testing()
 # - Connection state machine
 # - Uses connection.h
 # - src/connection.cpp
+#
+# Phase 10 adds:
+# - Timeouts and resource limits
+# - Uses server_config.h
+# - src/server_config.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -89,6 +94,7 @@ add_executable(aevrix
     src/static_file_server.cpp
     src/event_loop.cpp
     src/connection.cpp
+    src/server_config.cpp
 )
 
 # Ensure main executable can find aevrix headers

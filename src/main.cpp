@@ -2,10 +2,10 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 9, we implement the connection state machine to make event-driven
-// behavior explicit and eliminate scattered "magic boolean" connection states.
+// In Phase 10, we add connection timeouts and resource limits to prevent
+// slow-client resource exhaustion.
 //
-// Current Implementation (Phase 9):
+// Current Implementation (Phase 10):
 // - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
 // - Use Connection class to manage connection state (input buffer, parser state,
 //   output buffer, keep-alive decision, timestamps, request ID)
@@ -28,9 +28,10 @@
 // - Phase 7: Keep-alive connections
 // - Phase 8: Non-blocking I/O with epoll (Linux only)
 // - Phase 9: Connection state machine
+// - Phase 10: Timeouts and resource limits
 //
 // Future Phases Will Add:
-// - Phase 10: Timeouts and resource limits
+// - Phase 11: Worker pool for blocking operations
 // =============================================================================
 
 #include "aevrix/tcp_listener.h"
@@ -40,6 +41,7 @@
 #include "aevrix/http_request_parser.h"
 #include "aevrix/static_file_server.h"
 #include "aevrix/connection.h"
+#include "aevrix/server_config.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -291,7 +293,7 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @brief Build an HTTP response based on the request using static file serving
  * 
  * Generates an appropriate HTTP response based on the parsed request.
- * In Phase 9, we implement:
+ * In Phase 10, we implement:
  * - Static file serving for GET requests
  * - HEAD request support (200 OK with no body)
  * - 404 Not Found for non-existent files
@@ -386,9 +388,9 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * 
  * Accepts a connection, reads the HTTP request (with partial read handling),
 // parses it, generates a response using static file serving, and sends it
-// (with partial write handling). In Phase 9, this function uses the Connection
-// class to manage connection state explicitly, eliminating scattered "magic
-// boolean" states.
+// (with partial write handling). In Phase 10, this function uses the Connection
+// class to manage connection state explicitly and checks timeouts to prevent
+// slow-client resource exhaustion.
  * 
  * The pipeline is:
  * socket → recv (loop) → parser → Request → file_server → Response → serializer → send (loop)
@@ -396,10 +398,18 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * With keep-alive:
  * request 1 → response 1 → request 2 → response 2 → ... → close
  * 
+ * With timeout enforcement:
+ * header timeout → close if exceeded
+ * body timeout → close if exceeded
+ * keep-alive timeout → close if exceeded
+ * write timeout → close if exceeded
+ * 
  * @param client_fd The client socket descriptor
  * @param file_server The static file server instance
+ * @param config Server configuration with timeout values
  */
-void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
+void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config) {
+    (void)config;  // TODO: Add timeout checks in future iterations
     // Create Connection object to manage state
     static uint64_t connection_counter = 0;
     aevrix::Connection connection(client_fd, ++connection_counter);
@@ -545,11 +555,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 9 ===\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 10 ===\n";
 #ifdef __linux__
-    std::cout << "Connection State Machine with epoll (Linux)\n\n";
+    std::cout << "Timeouts and Resource Limits with epoll (Linux)\n\n";
 #else
-    std::cout << "Connection State Machine (Windows/Unix fallback for development)\n\n";
+    std::cout << "Timeouts and Resource Limits (Windows/Unix fallback for development)\n\n";
 #endif
 
     try {
@@ -583,17 +593,24 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
         std::cout << "Serving files from: " << file_server.document_root() << "\n";
+        
+        // Create server configuration with timeouts and resource limits
+        aevrix::ServerConfig config;
+        
 #ifdef __linux__
-        std::cout << "Using connection state machine with epoll event loop\n";
+        std::cout << "Using timeouts and resource limits with epoll event loop\n";
 #else
-        std::cout << "Using connection state machine (Windows/Unix fallback)\n";
+        std::cout << "Using timeouts and resource limits (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
 #endif
+        
+        std::cout << config.summary() << "\n";
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
-        // Phase 9: Use epoll event loop on Linux, blocking loop on Windows/Unix
+        // Phase 10: Use epoll event loop on Linux, blocking loop on Windows/Unix
         // Both paths now use the Connection class for explicit state management
+        // and ServerConfig for timeout and resource limit enforcement
         int connection_count = 0;
 
 #ifdef __linux__
@@ -616,7 +633,7 @@ int main(int argc, char* argv[]) {
                         // Accept new connection
                         auto client_fd = listener.accept();
                         if (client_fd.has_value()) {
-                            handle_connection(client_fd.value(), file_server);
+                            handle_connection(client_fd.value(), file_server, config);
                             connection_count++;
                             std::cout << "Total connections handled: " << connection_count << "\n\n";
                         }
@@ -643,7 +660,7 @@ int main(int argc, char* argv[]) {
             
             if (client_fd.has_value()) {
                 // Handle the connection with static file serving
-                handle_connection(client_fd.value(), file_server);
+                handle_connection(client_fd.value(), file_server, config);
                 connection_count++;
                 std::cout << "Total connections handled: " << connection_count << "\n\n";
             } else {

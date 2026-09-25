@@ -43,6 +43,11 @@
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
 
+// Forward declaration for ServerConfig
+namespace aevrix {
+class ServerConfig;
+}
+
 namespace aevrix {
 
 // Use http namespace for readability
@@ -322,6 +327,42 @@ public:
         auto now = std::chrono::steady_clock::now();
         return std::chrono::duration_cast<std::chrono::milliseconds>(now - created_at_);
     }
+
+    // =========================================================================
+    // Timeout Checking (Phase 10)
+    // =========================================================================
+
+    /**
+     * @brief Check if header timeout has been exceeded
+     * 
+     * @param config Server configuration with timeout values
+     * @return true if timeout exceeded, false otherwise
+     */
+    bool has_header_timeout(const ServerConfig& config) const;
+
+    /**
+     * @brief Check if body timeout has been exceeded
+     * 
+     * @param config Server configuration with timeout values
+     * @return true if timeout exceeded, false otherwise
+     */
+    bool has_body_timeout(const ServerConfig& config) const;
+
+    /**
+     * @brief Check if keep-alive timeout has been exceeded
+     * 
+     * @param config Server configuration with timeout values
+     * @return true if timeout exceeded, false otherwise
+     */
+    bool has_keep_alive_timeout(const ServerConfig& config) const;
+
+    /**
+     * @brief Check if write timeout has been exceeded
+     * 
+     * @param config Server configuration with timeout values
+     * @return true if timeout exceeded, false otherwise
+     */
+    bool has_write_timeout(const ServerConfig& config) const;
 
     // =========================================================================
     // Connection Identifiers
