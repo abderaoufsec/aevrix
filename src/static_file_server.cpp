@@ -31,6 +31,15 @@ StaticFileServer::StaticFileServer(const std::string& document_root)
         throw;
     }
     
+    // Make path absolute for validation
+    try {
+        document_root_path_ = std::filesystem::absolute(document_root_path_);
+        std::cout << "Document root absolute path: " << document_root_path_.string() << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to make absolute path: " << e.what() << "\n";
+        // Continue with relative path
+    }
+    
     // Validate that document root exists and is a directory
     if (!std::filesystem::exists(document_root_path_)) {
         throw std::runtime_error("Document root does not exist: " + document_root);

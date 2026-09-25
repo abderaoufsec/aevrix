@@ -2,22 +2,22 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 6, we implement static file serving with:
-// - Command-line argument parsing for --root
-// - Secure file serving from document root
-// - Path validation to prevent directory traversal
-// - MIME type detection for proper content serving
-// - 404 Not Found for non-existent files
-// - 403 Forbidden for directory access and path traversal attempts
+// In Phase 7, we implement keep-alive connections with:
+// - Connection header parsing from requests
+// - Multiple requests on same TCP connection
+// - Proper connection close handling
+// - HEAD request support (already implemented in Phase 6)
 //
-// Current Implementation (Phase 6):
+// Current Implementation (Phase 7):
 // - Create TCP listener on 127.0.0.1:8080
 // - Accept incoming connections continuously
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
+// - Parse Connection header for keep-alive support
 // - Serve static files using StaticFileServer
+// - Handle multiple requests per connection (keep-alive)
 // - Send responses with partial write handling
-// - Close the connection
+// - Close connection when appropriate
 //
 // Previous Phases:
 // - Phase 1: RAII file descriptors (UniqueFd)
@@ -25,9 +25,9 @@
 // - Phase 3: Structured HTTP response serialization
 // - Phase 4: HTTP request parsing with HttpRequestParser
 // - Phase 5: Full request/response pipeline with partial I/O
+// - Phase 6: Static file serving with security
 //
 // Future Phases Will Add:
-// - Phase 7: Keep-alive connections
 // - Phase 8: Non-blocking I/O with epoll
 // =============================================================================
 
@@ -236,21 +236,62 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
 }
 
 /**
+ * @brief Check if the request wants keep-alive connection
+ * 
+ * Parses the Connection header to determine if the client wants
+ * to keep the connection alive for multiple requests.
+ * 
+ * @param request The parsed HTTP request
+ * @return true if keep-alive is requested, false otherwise
+ */
+bool wants_keep_alive(const HttpRequest& request) {
+    // Check HTTP version - HTTP/1.1 defaults to keep-alive
+    if (request.version() == "HTTP/1.1") {
+        // Check for explicit "Connection: close" header
+        std::string connection_header = request.headers().get("Connection");
+        if (!connection_header.empty()) {
+            // Case-insensitive comparison
+            std::string lower = connection_header;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower == "close") {
+                return false;
+            }
+        }
+        return true;  // Default to keep-alive for HTTP/1.1
+    } else {
+        // HTTP/1.0 defaults to close unless "Connection: keep-alive"
+        std::string connection_header = request.headers().get("Connection");
+        if (!connection_header.empty()) {
+            std::string lower = connection_header;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower == "keep-alive") {
+                return true;
+            }
+        }
+        return false;  // Default to close for HTTP/1.0
+    }
+}
+
+/**
  * @brief Build an HTTP response based on the request using static file serving
  * 
  * Generates an appropriate HTTP response based on the parsed request.
- * In Phase 6, we implement:
+ * In Phase 7, we implement:
  * - Static file serving for GET requests
  * - HEAD request support (200 OK with no body)
  * - 404 Not Found for non-existent files
  * - 403 Forbidden for directory access and path traversal attempts
  * - 405 Method Not Allowed for unsupported methods
+ * - Keep-alive support based on Connection header
  * 
  * @param request The parsed HTTP request
  * @param file_server The static file server instance
  * @return HttpResponse The structured HTTP response
  */
 HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server) {
+    // Check if client wants keep-alive
+    bool keep_alive = wants_keep_alive(request);
+    
     // Check the method first
     if (request.method() == HttpMethod::GET || request.method() == HttpMethod::HEAD) {
         // Serve the file using StaticFileServer
@@ -262,7 +303,7 @@ HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer
                 HttpResponse response(StatusCode::OK, content);
                 response.set_header("Content-Type", mime_type);
                 response.set_header("Server", "Aevrix/0.1.0");
-                response.set_connection_policy(ConnectionPolicy::Close);
+                response.set_connection_policy(keep_alive ? ConnectionPolicy::KeepAlive : ConnectionPolicy::Close);
                 return response;
             } else {
                 // HEAD request - return 200 OK with no body
@@ -270,7 +311,7 @@ HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer
                 response.set_header("Content-Type", mime_type);
                 response.set_header("Content-Length", std::to_string(content.length()));
                 response.set_header("Server", "Aevrix/0.1.0");
-                response.set_connection_policy(ConnectionPolicy::Close);
+                response.set_connection_policy(keep_alive ? ConnectionPolicy::KeepAlive : ConnectionPolicy::Close);
                 return response;
             }
         } else if (status_code == 404) {
@@ -278,21 +319,21 @@ HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer
             HttpResponse response(StatusCode::NotFound, "Not Found");
             response.set_header("Content-Type", "text/plain");
             response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(ConnectionPolicy::Close);
+            response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         } else if (status_code == 403) {
             // Forbidden (directory access or path traversal attempt)
             HttpResponse response(StatusCode::Forbidden, "Forbidden");
             response.set_header("Content-Type", "text/plain");
             response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(ConnectionPolicy::Close);
+            response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         } else {
             // Internal server error
             HttpResponse response(StatusCode::InternalServerError, "Internal Server Error");
             response.set_header("Content-Type", "text/plain");
             response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(ConnectionPolicy::Close);
+            response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         }
     } else {
@@ -302,21 +343,25 @@ HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer
         response.set_header("Content-Type", "text/plain");
         response.set_header("Server", "Aevrix/0.1.0");
         response.set_header("Allow", "GET, HEAD");  // Indicate allowed methods
-        response.set_connection_policy(ConnectionPolicy::Close);
+        response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
         return response;
     }
 }
 
 /**
- * @brief Handle a single client connection
+ * @brief Handle a single client connection with keep-alive support
  * 
  * Accepts a connection, reads the HTTP request (with partial read handling),
 // parses it, generates a response using static file serving, and sends it
-// (with partial write handling). This is the Phase 6 implementation with
-// static file serving.
+// (with partial write handling). In Phase 7, this function supports
+// keep-alive connections by handling multiple requests on the same TCP
+// connection when the client requests it.
  * 
  * The pipeline is:
  * socket → recv (loop) → parser → Request → file_server → Response → serializer → send (loop)
+ * 
+ * With keep-alive:
+ * request 1 → response 1 → request 2 → response 2 → ... → close
  * 
  * @param client_fd The client socket descriptor
  * @param file_server The static file server instance
@@ -325,41 +370,66 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
     std::cout << "Handling client connection...\n";
 
     try {
-        // Parse the HTTP request with partial read handling
-        HttpRequestParser parser;
+        int request_count = 0;
+        bool keep_alive = true;
         
-        if (!receive_request(client_fd, parser)) {
-            // receive_request already handles error responses
-            return;
+        // Handle multiple requests on the same connection (keep-alive)
+        while (keep_alive) {
+            request_count++;
+            std::cout << "Processing request " << request_count << " on this connection\n";
+            
+            // Parse the HTTP request with partial read handling
+            HttpRequestParser parser;
+            
+            if (!receive_request(client_fd, parser)) {
+                // receive_request already handles error responses
+                std::cout << "Request " << request_count << " failed, closing connection\n";
+                break;
+            }
+
+            // Get the parsed request
+            const HttpRequest& request = parser.request();
+            
+            std::cout << "Parsed request: " << request.request_line() << "\n";
+            std::cout << "Method: " << aevrix::http::http_method_to_string(request.method()) << "\n";
+            std::cout << "Target: " << request.target() << "\n";
+            std::cout << "Headers: " << request.headers().size() << "\n";
+
+            // Build response based on request using static file serving
+            HttpResponse response = build_response(request, file_server);
+            
+            // Check if we should keep the connection alive
+            keep_alive = (response.connection_policy() == ConnectionPolicy::KeepAlive);
+            std::cout << "Keep-alive: " << (keep_alive ? "yes" : "no") << "\n";
+            
+            // Serialize the response
+            std::string serialized_response = HttpResponseSerializer::serialize(response);
+            
+            if (serialized_response.empty()) {
+                std::cerr << "Failed to serialize response\n";
+                break;
+            }
+
+            std::cout << "Sending response (" << serialized_response.length() << " bytes)...\n";
+
+            // Send the response with partial write handling
+            if (send_response(client_fd, serialized_response.c_str(), serialized_response.length())) {
+                std::cout << "Response sent successfully\n";
+            } else {
+                std::cerr << "Failed to send response\n";
+                break;
+            }
+            
+            // If not keep-alive, break the loop
+            if (!keep_alive) {
+                std::cout << "Connection will be closed after this response\n";
+                break;
+            }
+            
+            std::cout << "Waiting for next request on same connection...\n";
         }
-
-        // Get the parsed request
-        const HttpRequest& request = parser.request();
         
-        std::cout << "Parsed request: " << request.request_line() << "\n";
-        std::cout << "Method: " << aevrix::http::http_method_to_string(request.method()) << "\n";
-        std::cout << "Target: " << request.target() << "\n";
-        std::cout << "Headers: " << request.headers().size() << "\n";
-
-        // Build response based on request using static file serving
-        HttpResponse response = build_response(request, file_server);
-        
-        // Serialize the response
-        std::string serialized_response = HttpResponseSerializer::serialize(response);
-        
-        if (serialized_response.empty()) {
-            std::cerr << "Failed to serialize response\n";
-            return;
-        }
-
-        std::cout << "Sending response (" << serialized_response.length() << " bytes)...\n";
-
-        // Send the response with partial write handling
-        if (send_response(client_fd, serialized_response.c_str(), serialized_response.length())) {
-            std::cout << "Response sent successfully\n";
-        } else {
-            std::cerr << "Failed to send response\n";
-        }
+        std::cout << "Connection handled " << request_count << " request(s)\n";
 
     } catch (const std::exception& e) {
         std::cerr << "Exception in handle_connection: " << e.what() << "\n";
@@ -379,20 +449,21 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
  * 
  * Creates a TCP listener, accepts connections continuously, reads and parses HTTP
 // requests (with partial read handling), and handles them with static file serving
-// (with partial write handling). This is the Phase 6 implementation - static
-// file serving with security.
+// (with partial write handling). This is the Phase 7 implementation - static
+// file serving with keep-alive connections.
  * 
  * Usage:
  *   ./aevrix --root ./public
  *   # Server will listen on 127.0.0.1:8080
  *   # Serve files from ./public directory
  *   # Test with: curl http://127.0.0.1:8080/index.html
+ *   # Test keep-alive: curl http://127.0.0.1:8080/ http://127.0.0.1:8080/style.css
  * 
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 6 ===\n";
-    std::cout << "Static File Serving\n\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 7 ===\n";
+    std::cout << "Static File Serving with Keep-Alive\n\n";
 
     try {
         std::cout << "Parsing arguments...\n";
@@ -425,6 +496,7 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
         std::cout << "Serving files from: " << file_server.document_root() << "\n";
+        std::cout << "Keep-alive connections enabled\n";
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
