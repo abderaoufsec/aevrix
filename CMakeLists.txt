@@ -71,12 +71,18 @@ enable_testing()
 # - Static file serving using StaticFileServer class
 # - Uses static_file_server.h
 # - src/static_file_server.cpp
+#
+# Phase 8 adds:
+# - Event loop with epoll on Linux, select on Windows
+# - Uses event_loop.h
+# - src/event_loop.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
     src/tcp_listener.cpp
     src/http_request_parser.cpp
     src/static_file_server.cpp
+    src/event_loop.cpp
 )
 
 # Ensure main executable can find aevrix headers

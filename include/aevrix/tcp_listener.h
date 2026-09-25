@@ -150,11 +150,10 @@ public:
      * 
      * @param host The hostname or IP address to bind to (e.g., "127.0.0.1")
      * @param port The port number to listen on (e.g., 8080)
-     * @return true if successful, false if an error occurred
-     * 
-     * @note On error, error_code() and error_message() provide details
+     * @param non_blocking If true, sets the socket to non-blocking mode (for event loop)
+     * @return true if successful, false on error
      */
-    bool start(const std::string& host, uint16_t port);
+    bool start(const std::string& host, uint16_t port, bool non_blocking = false);
 
     /**
      * @brief Accept an incoming connection
@@ -294,6 +293,18 @@ private:
      * @return true if successful, false on error
      */
     bool listen_socket(socket_type sock, int backlog = 128);
+
+    /**
+     * @brief Set a socket to non-blocking mode (Phase 8)
+     * 
+     * Configures the socket to operate in non-blocking mode, which is required
+     * for event-driven I/O with epoll/select. In non-blocking mode, operations
+     * return immediately with EAGAIN/EWOULDBLOCK if they would block.
+     * 
+     * @param sock The socket to configure
+     * @return true if successful, false on error
+     */
+    bool set_non_blocking(socket_type sock);
 
     /**
      * @brief Convert hostname to address structure

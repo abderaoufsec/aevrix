@@ -2,15 +2,17 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 7, we implement keep-alive connections with:
-// - Connection header parsing from requests
-// - Multiple requests on same TCP connection
-// - Proper connection close handling
-// - HEAD request support (already implemented in Phase 6)
+// In Phase 8, we implement non-blocking I/O with epoll on Linux:
+// - Event-driven runtime using epoll (Linux) or select (Windows fallback)
+// - Non-blocking socket support
+// - Multiple connections handled efficiently without one thread per connection
+// - Proper handling of EAGAIN, EWOULDBLOCK, EINTR
+// - Keep-alive connections (from Phase 7)
+// - Static file serving (from Phase 6)
 //
-// Current Implementation (Phase 7):
-// - Create TCP listener on 127.0.0.1:8080
-// - Accept incoming connections continuously
+// Current Implementation (Phase 8):
+// - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
+// - Use event loop to handle multiple connections efficiently
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
 // - Parse Connection header for keep-alive support
@@ -26,9 +28,10 @@
 // - Phase 4: HTTP request parsing with HttpRequestParser
 // - Phase 5: Full request/response pipeline with partial I/O
 // - Phase 6: Static file serving with security
+// - Phase 7: Keep-alive connections
 //
 // Future Phases Will Add:
-// - Phase 8: Non-blocking I/O with epoll
+// - Phase 9: Connection state machine
 // =============================================================================
 
 #include "aevrix/tcp_listener.h"
@@ -37,6 +40,9 @@
 #include "aevrix/http_response_serializer.h"
 #include "aevrix/http_request_parser.h"
 #include "aevrix/static_file_server.h"
+#ifdef __linux__
+#include "aevrix/event_loop.h"
+#endif
 #include <iostream>
 #include <string>
 #include <cstdint>  // For uint16_t
@@ -276,7 +282,7 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @brief Build an HTTP response based on the request using static file serving
  * 
  * Generates an appropriate HTTP response based on the parsed request.
- * In Phase 7, we implement:
+ * In Phase 8, we implement:
  * - Static file serving for GET requests
  * - HEAD request support (200 OK with no body)
  * - 404 Not Found for non-existent files
@@ -462,8 +468,12 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server) {
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 7 ===\n";
-    std::cout << "Static File Serving with Keep-Alive\n\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 8 ===\n";
+#ifdef __linux__
+    std::cout << "Non-Blocking I/O with epoll (Linux)\n\n";
+#else
+    std::cout << "Blocking I/O (Windows/Unix fallback for development)\n\n";
+#endif
 
     try {
         std::cout << "Parsing arguments...\n";
@@ -496,14 +506,57 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
         std::cout << "Serving files from: " << file_server.document_root() << "\n";
+#ifdef __linux__
+        std::cout << "Using epoll event loop for non-blocking I/O\n";
+#else
+        std::cout << "Using blocking I/O (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
+#endif
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
-        // In Phase 6, this runs continuously (no connection limit)
-        // Phase 8 will replace this with epoll-based event loop
+        // Phase 8: Use epoll event loop on Linux, blocking loop on Windows/Unix
         int connection_count = 0;
 
+#ifdef __linux__
+        // Linux: Use epoll-based event loop for non-blocking I/O
+        try {
+            // Create event loop
+            aevrix::EventLoop event_loop;
+            
+            // Set listener to non-blocking mode
+            listener.stop();  // Stop current blocking listener
+            if (!listener.start(host, port, true)) {  // Start with non-blocking
+                std::cerr << "Failed to start non-blocking listener\n";
+                return 1;
+            }
+            
+            // Add listener socket to event loop
+            if (!event_loop.add_fd(listener.get_socket(), EPOLLIN, 
+                [&, file_server = std::ref(file_server)](int fd, EventType event) {
+                    if (event == EventType::Readable) {
+                        // Accept new connection
+                        auto client_fd = listener.accept();
+                        if (client_fd.has_value()) {
+                            handle_connection(client_fd.value(), file_server);
+                            connection_count++;
+                            std::cout << "Total connections handled: " << connection_count << "\n\n";
+                        }
+                    }
+                })) {
+                std::cerr << "Failed to add listener to event loop\n";
+                return 1;
+            }
+            
+            std::cout << "Starting event loop...\n";
+            event_loop.run();
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Event loop error: " << e.what() << "\n";
+            return 1;
+        }
+#else
+        // Windows/Unix: Use blocking loop for development
         while (true) {
             std::cout << "Waiting for connection...\n";
 
@@ -520,6 +573,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
+#endif
 
         std::cout << "\nServer stopping...\n";
 

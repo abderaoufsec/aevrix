@@ -21,6 +21,8 @@
 #include <windows.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace aevrix {
@@ -163,6 +165,40 @@ bool TcpListener::resolve_address(const std::string& host, uint16_t port,
 }
 
 // =============================================================================
+// Non-Blocking Socket Support (Phase 8)
+// =============================================================================
+
+bool TcpListener::set_non_blocking(socket_type sock) {
+#ifdef _WIN32
+    // Windows uses ioctlsocket with FIONBIO
+    unsigned long mode = 1;  // Non-blocking mode
+    int result = ioctlsocket(sock, FIONBIO, &mode);
+    if (result == SOCKET_ERROR) {
+        last_error_ = WSAGetLastError();
+        std::cerr << "ioctlsocket() failed: " << last_error_ << "\n";
+        return false;
+    }
+#else
+    // Unix/Linux uses fcntl with O_NONBLOCK
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0) {
+        last_error_ = errno;
+        std::cerr << "fcntl(F_GETFL) failed: " << strerror(last_error_) << "\n";
+        return false;
+    }
+    
+    if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+        last_error_ = errno;
+        std::cerr << "fcntl(F_SETFL) failed: " << strerror(last_error_) << "\n";
+        return false;
+    }
+#endif
+    
+    std::cout << "Socket set to non-blocking mode\n";
+    return true;
+}
+
+// =============================================================================
 // Socket Binding
 // =============================================================================
 
@@ -225,13 +261,17 @@ bool TcpListener::listen_socket(socket_type sock, int backlog) {
 // Public Methods
 // =============================================================================
 
-bool TcpListener::start(const std::string& host, uint16_t port) {
+bool TcpListener::start(const std::string& host, uint16_t port, bool non_blocking) {
     // Store the configuration
     host_ = host;
     port_ = port;
     last_error_ = 0;
 
-    std::cout << "Starting TCP listener on " << host << ":" << port << "\n";
+    std::cout << "Starting TCP listener on " << host << ":" << port;
+    if (non_blocking) {
+        std::cout << " (non-blocking mode)";
+    }
+    std::cout << "\n";
 
     // Create the socket
     socket_type sock = create_socket();
@@ -247,6 +287,18 @@ bool TcpListener::start(const std::string& host, uint16_t port) {
         close(sock);
 #endif
         return false;
+    }
+
+    // Set non-blocking mode if requested (Phase 8)
+    if (non_blocking) {
+        if (!set_non_blocking(sock)) {
+#ifdef _WIN32
+            closesocket(sock);
+#else
+            close(sock);
+#endif
+            return false;
+        }
     }
 
     // Bind the socket
@@ -287,7 +339,7 @@ std::optional<int> TcpListener::accept() {
         return std::nullopt;
     }
 
-    // Accept a connection (blocking call in Phase 2)
+    // Accept a connection (blocking call in Phase 2-7, non-blocking in Phase 8)
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
 
@@ -297,6 +349,12 @@ std::optional<int> TcpListener::accept() {
                                  &client_len);
     if (client_sock == INVALID_SOCKET) {
         last_error_ = WSAGetLastError();
+        
+        // Handle non-blocking mode: EWOULDBLOCK means no pending connections
+        if (last_error_ == WSAEWOULDBLOCK) {
+            return std::nullopt;  // No pending connections
+        }
+        
         std::cerr << "accept() failed: " << last_error_ << "\n";
         return std::nullopt;
     }
@@ -309,6 +367,18 @@ std::optional<int> TcpListener::accept() {
                              &client_len);
     if (client_fd < 0) {
         last_error_ = errno;
+        
+        // Handle non-blocking mode: EAGAIN/EWOULDBLOCK means no pending connections
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return std::nullopt;  // No pending connections
+        }
+        
+        // Handle EINTR: interrupted by signal, retry
+        if (errno == EINTR) {
+            std::cout << "accept() interrupted by signal, retrying\n";
+            return accept();  // Retry
+        }
+        
         std::cerr << "accept() failed: " << strerror(last_error_) << "\n";
         return std::nullopt;
     }
