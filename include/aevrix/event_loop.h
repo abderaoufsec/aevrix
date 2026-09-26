@@ -7,6 +7,8 @@
 // Phase 8 moves from blocking I/O to an event-driven runtime using epoll on Linux
 // and a select-based fallback on Windows for development purposes.
 //
+// Phase 15 adds graceful shutdown support to make shutdown safe and observable.
+//
 // Architecture:
 // epoll_wait/select
 //     │
@@ -158,6 +160,17 @@ public:
      * @return true if the event loop is running, false otherwise
      */
     bool is_running() const { return running_; }
+
+    // =========================================================================
+    // Graceful Shutdown (Phase 15)
+    // =========================================================================
+
+    /**
+     * @brief Check if shutdown was requested
+     * 
+     * @return true if shutdown was requested, false otherwise
+     */
+    bool shutdown_requested() const;
 
 private:
 #ifdef AEVRIX_USE_EPOLL

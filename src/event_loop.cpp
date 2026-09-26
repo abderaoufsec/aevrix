@@ -6,6 +6,8 @@
 // =============================================================================
 
 #include "aevrix/event_loop.h"
+#include "aevrix/signal_handler.h"
+#include "aevrix/logger.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -36,7 +38,7 @@ EventLoop::EventLoop() : running_(false) {
     // Allocate event array
     events_ = new struct epoll_event[MAX_EVENTS];
     
-    std::cout << "Event loop initialized with epoll (Linux)\n";
+    aevrix::g_logger.info("Event loop initialized with epoll (Linux)");
     
 #elif defined(AEVRIX_USE_SELECT)
     // Initialize select-based event loop for Windows/Unix
@@ -45,7 +47,7 @@ EventLoop::EventLoop() : running_(false) {
     FD_ZERO(&error_fds_);
     max_fd_ = 0;
     
-    std::cout << "Event loop initialized with select (Windows/Unix fallback)\n";
+    aevrix::g_logger.info("Event loop initialized with select (Windows/Unix fallback)");
 #endif
 }
 
@@ -197,21 +199,31 @@ bool EventLoop::run(int timeout_ms) {
         
         if (nfds < 0) {
             if (errno == EINTR) {
-                // Interrupted by signal, continue
-                std::cout << "epoll_wait interrupted by signal, continuing\n";
+                // Interrupted by signal, check for shutdown
+                if (g_signal_handler.shutdown_requested()) {
+                    aevrix::g_logger.info("Shutdown requested, stopping event loop");
+                    running_ = false;
+                    return false;
+                }
+                aevrix::g_logger.debug("epoll_wait interrupted by signal, continuing");
                 continue;
             }
-            std::cerr << "epoll_wait failed: " << strerror(errno) << "\n";
+            aevrix::g_logger.error("epoll_wait failed: " + std::string(strerror(errno)));
             return false;
         }
         
         if (nfds == 0) {
-            // Timeout occurred
-            std::cout << "epoll_wait timeout\n";
+            // Timeout occurred, check for shutdown
+            if (g_signal_handler.shutdown_requested()) {
+                aevrix::g_logger.info("Shutdown requested, stopping event loop");
+                running_ = false;
+                return false;
+            }
+            aevrix::g_logger.debug("epoll_wait timeout");
             continue;
         }
         
-        std::cout << "epoll_wait returned " << nfds << " events\n";
+        aevrix::g_logger.debug("epoll_wait returned " + std::to_string(nfds) + " events");
         
         // Process each event
         for (int i = 0; i < nfds; ++i) {
@@ -220,17 +232,17 @@ bool EventLoop::run(int timeout_ms) {
             
             // Determine event type
             if (revents & EPOLLIN) {
-                std::cout << "fd " << fd << " is readable\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " is readable");
                 // In a real implementation, we'd invoke the callback here
             }
             if (revents & EPOLLOUT) {
-                std::cout << "fd " << fd << " is writable\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " is writable");
             }
             if (revents & EPOLLERR) {
-                std::cout << "fd " << fd << " has error\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " has error");
             }
             if (revents & EPOLLHUP) {
-                std::cout << "fd " << fd << " hangup\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " hangup");
             }
         }
         
@@ -253,39 +265,54 @@ bool EventLoop::run(int timeout_ms) {
 #ifdef _WIN32
             int error = WSAGetLastError();
             if (error == WSAEINTR) {
-                std::cout << "select interrupted, continuing\n";
+                if (g_signal_handler.shutdown_requested()) {
+                    aevrix::g_logger.info("Shutdown requested, stopping event loop");
+                    running_ = false;
+                    return false;
+                }
+                aevrix::g_logger.debug("select interrupted, continuing");
                 continue;
             }
-            std::cerr << "select failed: " << error << "\n";
+            aevrix::g_logger.error("select failed: " + std::to_string(error));
 #else
             if (errno == EINTR) {
-                std::cout << "select interrupted by signal, continuing\n";
+                if (g_signal_handler.shutdown_requested()) {
+                    aevrix::g_logger.info("Shutdown requested, stopping event loop");
+                    running_ = false;
+                    return false;
+                }
+                aevrix::g_logger.debug("select interrupted by signal, continuing");
                 continue;
             }
-            std::cerr << "select failed: " << strerror(errno) << "\n";
+            aevrix::g_logger.error("select failed: " + std::string(strerror(errno)));
 #endif
             return false;
         }
         
         if (result == 0) {
-            std::cout << "select timeout\n";
+            if (g_signal_handler.shutdown_requested()) {
+                aevrix::g_logger.info("Shutdown requested, stopping event loop");
+                running_ = false;
+                return false;
+            }
+            aevrix::g_logger.debug("select timeout");
             continue;
         }
         
-        std::cout << "select returned " << result << " ready descriptors\n";
+        aevrix::g_logger.debug("select returned " + std::to_string(result) + " ready descriptors");
         
         // Check each registered fd
         for (const auto& [fd, callback] : fd_callbacks_) {
             if (FD_ISSET(fd, &temp_read_fds)) {
-                std::cout << "fd " << fd << " is readable\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " is readable");
                 callback(fd, EventType::Readable);
             }
             if (FD_ISSET(fd, &temp_write_fds)) {
-                std::cout << "fd " << fd << " is writable\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " is writable");
                 callback(fd, EventType::Writable);
             }
             if (FD_ISSET(fd, &temp_error_fds)) {
-                std::cout << "fd " << fd << " has error\n";
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " has error");
                 callback(fd, EventType::Error);
             }
         }
@@ -293,6 +320,10 @@ bool EventLoop::run(int timeout_ms) {
     }
     
     return true;
+}
+
+bool EventLoop::shutdown_requested() const {
+    return g_signal_handler.shutdown_requested();
 }
 
 void EventLoop::stop() {

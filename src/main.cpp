@@ -2,10 +2,10 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 14, we add structured logging to make failures diagnosable.
-// The logger includes log levels (DEBUG, INFO, WARN, ERROR), timestamps,
-// request IDs, connection IDs, and access logging with structured format.
-// Example access log: INFO conn=12 req=48 GET / 200 1254B 312us
+// In Phase 15, we add graceful shutdown to make shutdown safe and observable.
+// The shutdown sequence is: stop accepting → finish safe work → close connections
+// → stop workers → flush logs → exit. SIGINT and SIGTERM (Linux) and Ctrl+C
+// (Windows) trigger graceful shutdown without corrupting internal state.
 //
 // Current Implementation (Phase 13):
 // - Use configuration system to load settings from file or command-line
@@ -42,6 +42,7 @@
 // - Phase 12: Router for application-level routing
 // - Phase 13: Configuration system
 // - Phase 14: Structured logging
+// - Phase 15: Graceful shutdown
 //
 // Future Phases Will Add:
 // - Phase 13: Configuration system
@@ -59,6 +60,7 @@
 #include "aevrix/router.h"
 #include "aevrix/config_parser.h"
 #include "aevrix/logger.h"
+#include "aevrix/signal_handler.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -632,11 +634,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    aevrix::g_logger.info("=== Aevrix HTTP Server - Phase 14 ===");
+    aevrix::g_logger.info("=== Aevrix HTTP Server - Phase 15 ===");
 #ifdef __linux__
-    aevrix::g_logger.info("Configuration System with epoll (Linux)");
+    aevrix::g_logger.info("Graceful Shutdown with epoll (Linux)");
 #else
-    aevrix::g_logger.info("Configuration System (Windows/Unix fallback for development)");
+    aevrix::g_logger.info("Graceful Shutdown (Windows/Unix fallback for development)");
 #endif
 
 #ifdef _WIN32
@@ -661,6 +663,12 @@ int main(int argc, char* argv[]) {
 #endif
             return 1;
         }
+
+        // Set up signal handler for graceful shutdown
+        aevrix::g_logger.info("Setting up signal handler for graceful shutdown");
+        aevrix::g_signal_handler.set_shutdown_callback([]() {
+            aevrix::g_logger.info("Shutdown callback triggered");
+        });
 
         // Create server configuration
         aevrix::ServerConfig config;
@@ -782,7 +790,11 @@ int main(int argc, char* argv[]) {
             }
             
             aevrix::g_logger.info("Starting event loop...");
-            event_loop.run();
+            while (!aevrix::g_signal_handler.shutdown_requested()) {
+                if (!event_loop.run(1000)) {  // 1 second timeout for shutdown check
+                    break;
+                }
+            }
             
         } catch (const std::exception& e) {
             aevrix::g_logger.error("Event loop error: " + std::string(e.what()));
@@ -791,7 +803,7 @@ int main(int argc, char* argv[]) {
 #else
         // Windows/Unix: Use blocking loop for development
         aevrix::g_logger.info("Using blocking loop for development");
-        while (true) {
+        while (!aevrix::g_signal_handler.shutdown_requested()) {
             aevrix::g_logger.info("Waiting for connection...");
 
             // Accept a connection (blocking call)
@@ -809,10 +821,23 @@ int main(int argc, char* argv[]) {
         }
 #endif
 
-        aevrix::g_logger.info("Server stopping...");
+        aevrix::g_logger.info("Shutdown requested, stopping server...");
 
-        // Stop the listener (will close the listening socket)
+        // Graceful shutdown sequence:
+        // 1. Stop accepting connections
+        // 2. Finish safe work (worker pool shutdown)
+        // 3. Close connections
+        // 4. Stop workers
+        // 5. Flush logs
+        // 6. Exit
+        aevrix::g_logger.info("Step 1: Stop accepting connections");
         listener.stop();
+
+        aevrix::g_logger.info("Step 2: Finish safe work (worker pool shutdown)");
+        worker_pool.shutdown();
+
+        aevrix::g_logger.info("Step 3: Flush logs");
+        std::cout.flush();
 
         aevrix::g_logger.info("Server stopped gracefully");
 

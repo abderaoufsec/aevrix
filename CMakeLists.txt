@@ -109,6 +109,11 @@ enable_testing()
 # - Structured logging
 # - Uses logger.h
 # - src/logger.cpp
+#
+# Phase 15 adds:
+# - Graceful shutdown
+# - Uses signal_handler.h
+# - src/signal_handler.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -121,6 +126,7 @@ add_executable(aevrix
     src/router.cpp
     src/config_parser.cpp
     src/logger.cpp
+    src/signal_handler.cpp
 )
 
 # Threading support for worker pool
