@@ -43,5 +43,8 @@ benchmarks/results/
 *.tmp
 *.temp
 
+# Configuration files (commented out by default, uncomment if needed)
+# aevrix.conf
+
 # Keep formatter config
 !.clang-format

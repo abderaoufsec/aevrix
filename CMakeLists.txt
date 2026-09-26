@@ -99,6 +99,11 @@ enable_testing()
 # - Router for application-level routing
 # - Uses router.h
 # - src/router.cpp
+#
+# Phase 13 adds:
+# - Configuration system
+# - Uses config_parser.h
+# - src/config_parser.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -109,6 +114,7 @@ add_executable(aevrix
     src/connection.cpp
     src/server_config.cpp
     src/router.cpp
+    src/config_parser.cpp
 )
 
 # Threading support for worker pool

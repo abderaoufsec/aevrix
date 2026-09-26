@@ -2,15 +2,17 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 12, we introduce application-level routing without turning Aevrix
-// into a framework. The router consumes Request objects and produces Response
-// objects, following the design rule that routing must not know about sockets.
+// In Phase 13, we add a configuration system to move runtime policy out of
+// hard-coded constants. The configuration system covers host, port, workers,
+// document root, limits, timeouts, and logging with typed configuration object,
+// defaults, validation, and clear startup errors.
 //
-// Current Implementation (Phase 12):
-// - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
+// Current Implementation (Phase 13):
+// - Use configuration system to load settings from file or command-line
+// - Create TCP listener on configured host:port (non-blocking on Linux)
 // - Use Connection class to manage connection state (input buffer, parser state,
 //   output buffer, keep-alive decision, timestamps, request ID)
-// - Use ServerConfig to enforce timeouts and resource limits
+// - Use ServerConfig to enforce timeouts and resource limits (from config file)
 // - Use WorkerPool for blocking operations (filesystem I/O, etc.)
 // - Use Router for application-level routing (GET /, GET /health, GET /metrics)
 // - Bounded queue prevents unbounded task creation
@@ -38,6 +40,7 @@
 // - Phase 10: Timeouts and resource limits
 // - Phase 11: Worker pool for blocking operations
 // - Phase 12: Router for application-level routing
+// - Phase 13: Configuration system
 //
 // Future Phases Will Add:
 // - Phase 13: Configuration system
@@ -53,6 +56,7 @@
 #include "aevrix/server_config.h"
 #include "aevrix/worker_pool.h"
 #include "aevrix/router.h"
+#include "aevrix/config_parser.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -85,22 +89,33 @@ using namespace aevrix::http;
  * @brief Parse command-line arguments
  * 
  * Parses command-line arguments to extract configuration options.
-// Currently supports --root for specifying the document root directory.
+// In Phase 13, supports --config for configuration file and --root for document root.
  * 
  * @param argc Argument count
  * @param argv Argument values
+ * @param config_file Output parameter for configuration file path
  * @param document_root Output parameter for document root path
  * @return true if parsing succeeded, false if there was an error
  */
-bool parse_arguments(int argc, char* argv[], std::string& document_root) {
-    // Default document root
+bool parse_arguments(int argc, char* argv[], std::string& config_file, std::string& document_root) {
+    // Default values
+    config_file = "";
     document_root = "./public";
     
     // Parse command-line arguments
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         
-        if (arg == "--root" || arg == "-r") {
+        if (arg == "--config" || arg == "-c") {
+            // Next argument is the configuration file
+            if (i + 1 < argc) {
+                config_file = argv[++i];
+                std::cout << "Using configuration file: " << config_file << "\n";
+            } else {
+                std::cerr << "Error: --config requires a file argument\n";
+                return false;
+            }
+        } else if (arg == "--root" || arg == "-r") {
             // Next argument is the document root
             if (i + 1 < argc) {
                 document_root = argv[++i];
@@ -112,8 +127,9 @@ bool parse_arguments(int argc, char* argv[], std::string& document_root) {
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [OPTIONS]\n";
             std::cout << "Options:\n";
-            std::cout << "  --root, -r PATH    Set document root directory (default: ./public)\n";
-            std::cout << "  --help, -h         Show this help message\n";
+            std::cout << "  --config, -c FILE   Load configuration from file\n";
+            std::cout << "  --root, -r PATH     Set document root directory (default: ./public)\n";
+            std::cout << "  --help, -h          Show this help message\n";
             return false;
         } else {
             std::cerr << "Error: Unknown argument: " << arg << "\n";
@@ -579,35 +595,61 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 12 ===\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 13 ===\n";
 #ifdef __linux__
-    std::cout << "Router with epoll (Linux)\n\n";
+    std::cout << "Configuration System with epoll (Linux)\n\n";
 #else
-    std::cout << "Router (Windows/Unix fallback for development)\n\n";
+    std::cout << "Configuration System (Windows/Unix fallback for development)\n\n";
+#endif
+
+#ifdef _WIN32
+    // Initialize Winsock on Windows
+    WSADATA wsa_data;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    if (result != 0) {
+        std::cerr << "WSAStartup failed: " << result << "\n";
+        return 1;
+    }
 #endif
 
     try {
         std::cout << "Parsing arguments...\n";
         // Parse command-line arguments
+        std::string config_file;
         std::string document_root;
-        if (!parse_arguments(argc, argv, document_root)) {
+        if (!parse_arguments(argc, argv, config_file, document_root)) {
             std::cout << "Argument parsing failed\n";
+#ifdef _WIN32
+            WSACleanup();
+#endif
             return 1;
         }
 
-        std::cout << "Attempting to create static file server with root: " << document_root << "\n";
+        // Create server configuration
+        aevrix::ServerConfig config;
+        
+        // Load configuration from file if specified
+        if (!config_file.empty()) {
+            std::cout << "Loading configuration from file: " << config_file << "\n";
+            aevrix::ConfigParser parser;
+            parser.parse_file(config_file);
+            config.load_from_parser(parser);
+        }
+        
+        // Override document root from command-line if specified
+        if (!document_root.empty() && document_root != "./public") {
+            config.set_document_root(document_root);
+        }
+
+        std::cout << "Attempting to create static file server with root: " << config.document_root() << "\n";
 
         // Create static file server
-        aevrix::StaticFileServer file_server(document_root);
+        aevrix::StaticFileServer file_server(config.document_root());
 
         std::cout << "Static file server created successfully\n";
 
-        // Create TCP listener on localhost:8080
-        // In future phases, this will be configurable via command-line arguments
-        const std::string host = "127.0.0.1";
-        const uint16_t port = 8080;
-
-        aevrix::TcpListener listener(host, port);
+        // Create TCP listener on configured host:port
+        aevrix::TcpListener listener(config.host(), config.port());
         
         if (!listener.is_listening()) {
             std::cerr << "Failed to start TCP listener\n";
@@ -615,16 +657,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        std::cout << "\nServer running on http://" << host << ":" << port << "/\n";
+        std::cout << "\nServer running on http://" << listener.host() << ":" << listener.port() << "/\n";
         std::cout << "Serving files from: " << file_server.document_root() << "\n";
         
-        // Create server configuration with timeouts and resource limits
-        aevrix::ServerConfig config;
-        
         // Create worker pool for blocking operations
-        // Use 4 workers and a queue size of 128
+        // Use configured number of workers and queue size
         // This keeps blocking filesystem work out of the event loop
-        aevrix::WorkerPool worker_pool(4, 128);
+        aevrix::WorkerPool worker_pool(config.workers(), 128);
         
         // Create router for application-level routing
         aevrix::Router router;
@@ -660,9 +699,9 @@ int main(int argc, char* argv[]) {
         });
         
 #ifdef __linux__
-        std::cout << "Using router with epoll event loop\n";
+        std::cout << "Using configuration system with epoll event loop\n";
 #else
-        std::cout << "Using router (Windows/Unix fallback)\n";
+        std::cout << "Using configuration system (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
 #endif
         
@@ -739,13 +778,23 @@ int main(int argc, char* argv[]) {
         listener.stop();
 
         std::cout << "Server stopped gracefully\n";
+
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 0;
 
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << "\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     } catch (...) {
         std::cerr << "Unknown exception occurred\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     }
 }

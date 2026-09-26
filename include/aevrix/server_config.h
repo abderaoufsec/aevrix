@@ -2,10 +2,14 @@
 // Aevrix - Server Configuration
 // =============================================================================
 // This file implements the server configuration for timeouts and resource limits.
-// In Phase 10, we add connection timeouts and resource limits to prevent
-// slow-client resource exhaustion.
+// In Phase 13, we add configuration file support to move runtime policy out
+// of hard-coded constants.
 //
 // The configuration includes:
+// - Host: Server binding address
+// - Port: Server binding port
+// - Workers: Number of worker threads
+// - Document root: Static file serving directory
 // - Header timeout: Maximum time to receive HTTP headers
 // - Body timeout: Maximum time to receive HTTP body
 // - Keep-alive timeout: Maximum idle time between requests
@@ -15,10 +19,10 @@
 // - Max request body: Maximum size for HTTP request body
 //
 // Previous Phases:
-// - Phase 9: Connection state machine
+// - Phase 12: Router for application-level routing
 //
 // Future Phases Will Add:
-// - Phase 11: Worker pool for blocking operations
+// - Phase 14: Structured logging
 // =============================================================================
 
 #pragma once
@@ -26,6 +30,11 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+
+// Forward declaration for ConfigParser
+namespace aevrix {
+class ConfigParser;
+}
 
 namespace aevrix {
 
@@ -247,6 +256,74 @@ public:
      */
     std::string summary() const;
 
+    // =========================================================================
+    // Configuration Loading (Phase 13)
+    // =========================================================================
+
+    /**
+     * @brief Load configuration from ConfigParser
+     * 
+     * @param parser The configuration parser
+     * @throws std::runtime_error if configuration is invalid
+     */
+    void load_from_parser(const ConfigParser& parser);
+
+    /**
+     * @brief Get the host address
+     * 
+     * @return std::string The host address
+     */
+    const std::string& host() const { return host_; }
+
+    /**
+     * @brief Set the host address
+     * 
+     * @param host The host address
+     */
+    void set_host(const std::string& host) { host_ = host; }
+
+    /**
+     * @brief Get the port number
+     * 
+     * @return uint16_t The port number
+     */
+    uint16_t port() const { return port_; }
+
+    /**
+     * @brief Set the port number
+     * 
+     * @param port The port number
+     */
+    void set_port(uint16_t port) { port_ = port; }
+
+    /**
+     * @brief Get the number of worker threads
+     * 
+     * @return uint32_t The number of workers
+     */
+    uint32_t workers() const { return workers_; }
+
+    /**
+     * @brief Set the number of worker threads
+     * 
+     * @param workers The number of workers
+     */
+    void set_workers(uint32_t workers) { workers_ = workers; }
+
+    /**
+     * @brief Get the document root directory
+     * 
+     * @return std::string The document root directory
+     */
+    const std::string& document_root() const { return document_root_; }
+
+    /**
+     * @brief Set the document root directory
+     * 
+     * @param document_root The document root directory
+     */
+    void set_document_root(const std::string& document_root) { document_root_ = document_root; }
+
 private:
     // =========================================================================
     // Timeout Configuration (milliseconds)
@@ -264,6 +341,15 @@ private:
     uint32_t max_connections_;         // Maximum concurrent connections
     uint32_t max_buffer_size_;         // Maximum buffer size
     uint32_t max_request_body_;        // Maximum request body size
+
+    // =========================================================================
+    // Server Configuration (Phase 13)
+    // =========================================================================
+
+    std::string host_;                // Server binding address
+    uint16_t port_;                    // Server binding port
+    uint32_t workers_;                 // Number of worker threads
+    std::string document_root_;        // Static file serving directory
 };
 
 } // namespace aevrix
