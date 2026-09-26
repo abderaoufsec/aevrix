@@ -94,6 +94,11 @@ enable_testing()
 # - Worker pool for blocking operations
 # - Uses worker_pool.h
 # - Requires threading support
+#
+# Phase 12 adds:
+# - Router for application-level routing
+# - Uses router.h
+# - src/router.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -103,6 +108,7 @@ add_executable(aevrix
     src/event_loop.cpp
     src/connection.cpp
     src/server_config.cpp
+    src/router.cpp
 )
 
 # Threading support for worker pool

@@ -2,23 +2,25 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 11, we add a bounded worker pool for blocking operations to keep
-// blocking filesystem/application work out of the event loop, ensuring the
-// event loop remains responsive.
+// In Phase 12, we introduce application-level routing without turning Aevrix
+// into a framework. The router consumes Request objects and produces Response
+// objects, following the design rule that routing must not know about sockets.
 //
-// Current Implementation (Phase 11):
+// Current Implementation (Phase 12):
 // - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
 // - Use Connection class to manage connection state (input buffer, parser state,
 //   output buffer, keep-alive decision, timestamps, request ID)
 // - Use ServerConfig to enforce timeouts and resource limits
 // - Use WorkerPool for blocking operations (filesystem I/O, etc.)
+// - Use Router for application-level routing (GET /, GET /health, GET /metrics)
 // - Bounded queue prevents unbounded task creation
 // - Clean shutdown without detached threads
+// - Router consumes Request and produces Response (no socket knowledge)
 // - Use event loop to handle multiple connections efficiently
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
 // - Parse Connection header for keep-alive support
-// - Serve static files using StaticFileServer
+// - Route requests to handlers (or fall back to static file serving)
 // - Handle multiple requests per connection (keep-alive)
 // - Send responses with partial write handling
 // - Close connection when appropriate
@@ -35,10 +37,10 @@
 // - Phase 9: Connection state machine
 // - Phase 10: Timeouts and resource limits
 // - Phase 11: Worker pool for blocking operations
-// - Phase 11: Worker pool for blocking operations
+// - Phase 12: Router for application-level routing
 //
 // Future Phases Will Add:
-// - Phase 11: Worker pool for blocking operations
+// - Phase 13: Configuration system
 // =============================================================================
 
 #include "aevrix/tcp_listener.h"
@@ -50,6 +52,7 @@
 #include "aevrix/connection.h"
 #include "aevrix/server_config.h"
 #include "aevrix/worker_pool.h"
+#include "aevrix/router.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -313,7 +316,19 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @param file_server The static file server instance
  * @return HttpResponse The structured HTTP response
  */
-aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server) {
+aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server, aevrix::Router& router) {
+    // First, try to route the request through the router
+    // The router consumes Request and produces Response (no socket knowledge)
+    try {
+        HttpResponse response = router.route(request);
+        // Router found a handler, return the response
+        return response;
+    } catch (const std::exception& e) {
+        // Router returned an error, fall back to static file serving
+        std::cerr << "Router error: " << e.what() << ", falling back to static file serving\n";
+    }
+    
+    // No route found or router error, fall back to static file serving
     // Check if client wants keep-alive
     bool keep_alive = wants_keep_alive(request);
     
@@ -416,7 +431,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * @param file_server The static file server instance
  * @param config Server configuration with timeout values
  */
-void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config, aevrix::WorkerPool& worker_pool) {
+void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config, aevrix::WorkerPool& worker_pool, aevrix::Router& router) {
     (void)config;  // TODO: Add timeout checks in future iterations
     (void)worker_pool;  // TODO: Use worker pool for blocking filesystem operations
     // Create Connection object to manage state
@@ -475,8 +490,8 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             // Evaluate keep-alive policy
             connection.evaluate_keep_alive(request);
             
-            // Build response based on request using static file serving
-            HttpResponse response = build_response(request, file_server);
+            // Build response based on request using router or static file serving
+            HttpResponse response = build_response(request, file_server, router);
             
             // Set current response in connection
             connection.set_current_response(response);
@@ -564,11 +579,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 11 ===\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 12 ===\n";
 #ifdef __linux__
-    std::cout << "Worker Pool with epoll (Linux)\n\n";
+    std::cout << "Router with epoll (Linux)\n\n";
 #else
-    std::cout << "Worker Pool (Windows/Unix fallback for development)\n\n";
+    std::cout << "Router (Windows/Unix fallback for development)\n\n";
 #endif
 
     try {
@@ -611,10 +626,43 @@ int main(int argc, char* argv[]) {
         // This keeps blocking filesystem work out of the event loop
         aevrix::WorkerPool worker_pool(4, 128);
         
+        // Create router for application-level routing
+        aevrix::Router router;
+        
+        // Register GET / route (root endpoint)
+        router.add_route("GET", "/", [](const HttpRequest& request) {
+            (void)request;  // Root endpoint doesn't need request details
+            HttpResponse response(StatusCode::OK, "Aevrix HTTP Server v0.1.0\n");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(ConnectionPolicy::KeepAlive);
+            return response;
+        });
+        
+        // Register GET /health route (health check endpoint)
+        router.add_route("GET", "/health", [](const HttpRequest& request) {
+            (void)request;  // Health check doesn't need request details
+            HttpResponse response(StatusCode::OK, "OK\n");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(ConnectionPolicy::KeepAlive);
+            return response;
+        });
+        
+        // Register GET /metrics route (metrics endpoint)
+        router.add_route("GET", "/metrics", [](const HttpRequest& request) {
+            (void)request;  // Metrics endpoint doesn't need request details yet
+            HttpResponse response(StatusCode::OK, "Metrics endpoint - not yet implemented\n");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(ConnectionPolicy::KeepAlive);
+            return response;
+        });
+        
 #ifdef __linux__
-        std::cout << "Using worker pool with epoll event loop\n";
+        std::cout << "Using router with epoll event loop\n";
 #else
-        std::cout << "Using worker pool (Windows/Unix fallback)\n";
+        std::cout << "Using router (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
 #endif
         
@@ -648,7 +696,7 @@ int main(int argc, char* argv[]) {
                         // Accept new connection
                         auto client_fd = listener.accept();
                         if (client_fd.has_value()) {
-                            handle_connection(client_fd.value(), file_server, config, worker_pool);
+                            handle_connection(client_fd.value(), file_server, config, worker_pool, router);
                             connection_count++;
                             std::cout << "Total connections handled: " << connection_count << "\n\n";
                         }
@@ -675,7 +723,7 @@ int main(int argc, char* argv[]) {
             
             if (client_fd.has_value()) {
                 // Handle the connection with static file serving
-                handle_connection(client_fd.value(), file_server, config, worker_pool);
+                handle_connection(client_fd.value(), file_server, config, worker_pool, router);
                 connection_count++;
                 std::cout << "Total connections handled: " << connection_count << "\n\n";
             } else {
