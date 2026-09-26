@@ -10,6 +10,7 @@
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
 #include "aevrix/server_config.h"
+#include "aevrix/logger.h"
 #include <iostream>
 #include <algorithm>
 
@@ -24,7 +25,8 @@ Connection::Connection(int fd, uint64_t id)
     , created_at_(std::chrono::steady_clock::now())
     , last_activity_(std::chrono::steady_clock::now()) {
     
-    std::cout << "Connection " << id_ << " created (fd=" << fd_ << ")\n";
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                        "Connection created (fd=" + std::to_string(fd) + ")");
 }
 
 void Connection::evaluate_keep_alive(const HttpRequest& request) {
@@ -38,14 +40,17 @@ void Connection::evaluate_keep_alive(const HttpRequest& request) {
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (lower == "close") {
                 keep_alive_ = false;
-                std::cout << "Connection " << id_ << ": keep-alive disabled (Connection: close)\n";
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                     "keep-alive disabled (Connection: close)");
             } else {
                 keep_alive_ = true;
-                std::cout << "Connection " << id_ << ": keep-alive enabled (HTTP/1.1 default)\n";
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                     "keep-alive enabled (HTTP/1.1 default)");
             }
         } else {
             keep_alive_ = true;
-            std::cout << "Connection " << id_ << ": keep-alive enabled (HTTP/1.1 default)\n";
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                 "keep-alive enabled (HTTP/1.1 default)");
         }
     } else {
         // HTTP/1.0 defaults to close unless "Connection: keep-alive"
@@ -55,14 +60,17 @@ void Connection::evaluate_keep_alive(const HttpRequest& request) {
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (lower == "keep-alive") {
                 keep_alive_ = true;
-                std::cout << "Connection " << id_ << ": keep-alive enabled (HTTP/1.0 explicit)\n";
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                     "keep-alive enabled (HTTP/1.0 explicit)");
             } else {
                 keep_alive_ = false;
-                std::cout << "Connection " << id_ << ": keep-alive disabled (HTTP/1.0 default)\n";
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                     "keep-alive disabled (HTTP/1.0 default)");
             }
         } else {
             keep_alive_ = false;
-            std::cout << "Connection " << id_ << ": keep-alive disabled (HTTP/1.0 default)\n";
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+                                                 "keep-alive disabled (HTTP/1.0 default)");
         }
     }
 }
@@ -78,8 +86,9 @@ bool Connection::has_header_timeout(const ServerConfig& config) const {
     
     auto elapsed = time_since_activity();
     if (elapsed.count() > static_cast<int64_t>(config.header_timeout_ms())) {
-        std::cout << "Connection " << id_ << ": header timeout (" 
-                  << elapsed.count() << " ms > " << config.header_timeout_ms() << " ms)\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, id_, 
+                                             "header timeout (" + std::to_string(elapsed.count()) + 
+                                             " ms > " + std::to_string(config.header_timeout_ms()) + " ms)");
         return true;
     }
     
@@ -93,8 +102,9 @@ bool Connection::has_body_timeout(const ServerConfig& config) const {
     
     auto elapsed = time_since_activity();
     if (elapsed.count() > static_cast<int64_t>(config.body_timeout_ms())) {
-        std::cout << "Connection " << id_ << ": body timeout (" 
-                  << elapsed.count() << " ms > " << config.body_timeout_ms() << " ms)\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, id_, 
+                                             "body timeout (" + std::to_string(elapsed.count()) + 
+                                             " ms > " + std::to_string(config.body_timeout_ms()) + " ms)");
         return true;
     }
     
@@ -108,8 +118,9 @@ bool Connection::has_keep_alive_timeout(const ServerConfig& config) const {
     
     auto elapsed = time_since_activity();
     if (elapsed.count() > static_cast<int64_t>(config.keep_alive_timeout_ms())) {
-        std::cout << "Connection " << id_ << ": keep-alive timeout (" 
-                  << elapsed.count() << " ms > " << config.keep_alive_timeout_ms() << " ms)\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, id_, 
+                                             "keep-alive timeout (" + std::to_string(elapsed.count()) + 
+                                             " ms > " + std::to_string(config.keep_alive_timeout_ms()) + " ms)");
         return true;
     }
     
@@ -123,8 +134,9 @@ bool Connection::has_write_timeout(const ServerConfig& config) const {
     
     auto elapsed = time_since_activity();
     if (elapsed.count() > static_cast<int64_t>(config.write_timeout_ms())) {
-        std::cout << "Connection " << id_ << ": write timeout (" 
-                  << elapsed.count() << " ms > " << config.write_timeout_ms() << " ms)\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, id_, 
+                                             "write timeout (" + std::to_string(elapsed.count()) + 
+                                             " ms > " + std::to_string(config.write_timeout_ms()) + " ms)");
         return true;
     }
     

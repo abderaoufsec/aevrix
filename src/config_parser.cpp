@@ -5,6 +5,7 @@
 // =============================================================================
 
 #include "aevrix/config_parser.h"
+#include "aevrix/logger.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -14,7 +15,7 @@
 namespace aevrix {
 
 ConfigParser::ConfigParser() {
-    std::cout << "Configuration parser initialized\n";
+    aevrix::g_logger.debug("Configuration parser initialized");
 }
 
 void ConfigParser::parse_file(const std::string& config_file) {
@@ -23,7 +24,7 @@ void ConfigParser::parse_file(const std::string& config_file) {
         throw std::runtime_error("Cannot open configuration file: " + config_file);
     }
 
-    std::cout << "Parsing configuration file: " << config_file << "\n";
+    aevrix::g_logger.info("Parsing configuration file: " + config_file);
 
     std::string line;
     int line_number = 0;
@@ -32,7 +33,7 @@ void ConfigParser::parse_file(const std::string& config_file) {
         parse_line(line, line_number);
     }
 
-    std::cout << "Configuration parsed successfully (" << values_.size() << " values)\n";
+    aevrix::g_logger.info("Configuration parsed successfully (" + std::to_string(values_.size()) + " values)");
 }
 
 void ConfigParser::parse_line(const std::string& line, int line_number) {
@@ -47,7 +48,7 @@ void ConfigParser::parse_line(const std::string& line, int line_number) {
     // Parse key = value
     size_t equals_pos = trimmed.find('=');
     if (equals_pos == std::string::npos) {
-        std::cerr << "Warning: Invalid configuration line (no '=') at line " << line_number << ": " << line << "\n";
+        aevrix::g_logger.warn("Invalid configuration line (no '=') at line " + std::to_string(line_number) + ": " + line);
         return;
     }
 
@@ -55,12 +56,12 @@ void ConfigParser::parse_line(const std::string& line, int line_number) {
     std::string value = trim(trimmed.substr(equals_pos + 1));
 
     if (key.empty()) {
-        std::cerr << "Warning: Empty key in configuration line " << line_number << ": " << line << "\n";
+        aevrix::g_logger.warn("Empty key in configuration line " + std::to_string(line_number) + ": " + line);
         return;
     }
 
     values_[key] = value;
-    std::cout << "  " << key << " = " << value << "\n";
+    aevrix::g_logger.debug("Configuration: " + key + " = " + value);
 }
 
 std::string ConfigParser::get_string(const std::string& key, const std::string& default_value) const {
@@ -77,7 +78,7 @@ int64_t ConfigParser::get_int(const std::string& key, int64_t default_value) con
         try {
             return std::stoll(it->second);
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Invalid integer value for " << key << ": " << it->second << "\n";
+            aevrix::g_logger.warn("Invalid integer value for " + key + ": " + it->second);
             return default_value;
         }
     }
@@ -95,7 +96,7 @@ bool ConfigParser::get_bool(const std::string& key, bool default_value) const {
         } else if (value == "false" || value == "no" || value == "0") {
             return false;
         }
-        std::cerr << "Warning: Invalid boolean value for " << key << ": " << it->second << "\n";
+        aevrix::g_logger.warn("Invalid boolean value for " + key + ": " + it->second);
     }
     return default_value;
 }

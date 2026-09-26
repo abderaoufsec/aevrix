@@ -7,19 +7,20 @@
 #include "aevrix/router.h"
 #include "aevrix/http_method.h"
 #include "aevrix/http_status.h"
+#include "aevrix/logger.h"
 #include <iostream>
 #include <algorithm>
 
 namespace aevrix {
 
 Router::Router() {
-    std::cout << "Router initialized\n";
+    aevrix::g_logger.debug("Router initialized");
 }
 
 void Router::add_route(const std::string& method, const std::string& path, RouteHandler handler) {
     std::string key = make_route_key(method, path);
     routes_[key] = std::move(handler);
-    std::cout << "Registered route: " << method << " " << path << "\n";
+    aevrix::g_logger.debug("Registered route: " + method + " " + path);
 }
 
 HttpResponse Router::route(const HttpRequest& request) const {
@@ -34,7 +35,7 @@ HttpResponse Router::route(const HttpRequest& request) const {
     }
     
     // No handler found, return 404
-    std::cout << "No handler found for: " << method_str << " " << request.target() << "\n";
+    aevrix::g_logger.debug("No handler found for: " + method_str + " " + request.target());
     HttpResponse response(StatusCode::NotFound, "Not Found");
     response.set_header("Content-Type", "text/plain");
     response.set_header("Server", "Aevrix/0.1.0");

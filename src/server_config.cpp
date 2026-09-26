@@ -6,6 +6,7 @@
 
 #include "aevrix/server_config.h"
 #include "aevrix/config_parser.h"
+#include "aevrix/logger.h"
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -133,6 +134,7 @@ void ServerConfig::load_from_parser(const ConfigParser& parser) {
     }
     
     std::cout << "Configuration loaded and validated successfully\n";
+    aevrix::g_logger.info("Configuration loaded and validated successfully");
 }
 
 } // namespace aevrix

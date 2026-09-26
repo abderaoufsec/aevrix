@@ -2,10 +2,10 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 13, we add a configuration system to move runtime policy out of
-// hard-coded constants. The configuration system covers host, port, workers,
-// document root, limits, timeouts, and logging with typed configuration object,
-// defaults, validation, and clear startup errors.
+// In Phase 14, we add structured logging to make failures diagnosable.
+// The logger includes log levels (DEBUG, INFO, WARN, ERROR), timestamps,
+// request IDs, connection IDs, and access logging with structured format.
+// Example access log: INFO conn=12 req=48 GET / 200 1254B 312us
 //
 // Current Implementation (Phase 13):
 // - Use configuration system to load settings from file or command-line
@@ -41,6 +41,7 @@
 // - Phase 11: Worker pool for blocking operations
 // - Phase 12: Router for application-level routing
 // - Phase 13: Configuration system
+// - Phase 14: Structured logging
 //
 // Future Phases Will Add:
 // - Phase 13: Configuration system
@@ -57,6 +58,7 @@
 #include "aevrix/worker_pool.h"
 #include "aevrix/router.h"
 #include "aevrix/config_parser.h"
+#include "aevrix/logger.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -65,6 +67,7 @@
 #include <cstdint>  // For uint16_t
 #include <vector>   // For command-line arguments
 #include <memory>   // For std::unique_ptr
+#include <chrono>   // For timing
 
 // Bring HTTP types into current namespace for readability
 using aevrix::http::HttpRequest;
@@ -110,18 +113,18 @@ bool parse_arguments(int argc, char* argv[], std::string& config_file, std::stri
             // Next argument is the configuration file
             if (i + 1 < argc) {
                 config_file = argv[++i];
-                std::cout << "Using configuration file: " << config_file << "\n";
+                aevrix::g_logger.info("Using configuration file: " + config_file);
             } else {
-                std::cerr << "Error: --config requires a file argument\n";
+                aevrix::g_logger.error("--config requires a file argument");
                 return false;
             }
         } else if (arg == "--root" || arg == "-r") {
             // Next argument is the document root
             if (i + 1 < argc) {
                 document_root = argv[++i];
-                std::cout << "Using document root: " << document_root << "\n";
+                aevrix::g_logger.info("Using document root: " + document_root);
             } else {
-                std::cerr << "Error: --root requires a path argument\n";
+                aevrix::g_logger.error("--root requires a path argument");
                 return false;
             }
         } else if (arg == "--help" || arg == "-h") {
@@ -132,8 +135,8 @@ bool parse_arguments(int argc, char* argv[], std::string& config_file, std::stri
             std::cout << "  --help, -h          Show this help message\n";
             return false;
         } else {
-            std::cerr << "Error: Unknown argument: " << arg << "\n";
-            std::cerr << "Use --help for usage information\n";
+            aevrix::g_logger.error("Unknown argument: " + arg);
+            std::cout << "Use --help for usage information\n";
             return false;
         }
     }
@@ -167,14 +170,14 @@ bool send_response(int client_fd, const char* data, size_t length) {
         int sent = send(sock, data + total_sent, static_cast<int>(remaining), 0);
         
         if (sent == SOCKET_ERROR) {
-            std::cerr << "send() failed: " << WSAGetLastError() << "\n";
+            aevrix::g_logger.error("send() failed: " + std::to_string(WSAGetLastError()));
             return false;
         }
 #else
         ssize_t sent = send(client_fd, data + total_sent, remaining, 0);
         
         if (sent < 0) {
-            std::cerr << "send() failed: " << strerror(errno) << "\n";
+            aevrix::g_logger.error("send() failed: " + std::string(strerror(errno)));
             return false;
         }
 #endif
@@ -234,7 +237,7 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
         int received = recv(sock, buffer, static_cast<int>(BUFFER_SIZE), 0);
         
         if (received == SOCKET_ERROR) {
-            std::cerr << "recv() failed: " << WSAGetLastError() << "\n";
+            aevrix::g_logger.error("recv() failed: " + std::to_string(WSAGetLastError()));
             // Send 400 Bad Request for recv errors
             send_error_response(client_fd, StatusCode::BadRequest, "Receive error");
             return false;
@@ -242,14 +245,14 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
         
         if (received == 0) {
             // Connection closed by client
-            std::cerr << "Connection closed by client\n";
+            aevrix::g_logger.warn("Connection closed by client");
             return false;
         }
 #else
         ssize_t received = recv(client_fd, buffer, BUFFER_SIZE, 0);
         
         if (received < 0) {
-            std::cerr << "recv() failed: " << strerror(errno) << "\n";
+            aevrix::g_logger.error("recv() failed: " + std::string(strerror(errno)));
             // Send 400 Bad Request for recv errors
             send_error_response(client_fd, StatusCode::BadRequest, "Receive error");
             return false;
@@ -257,7 +260,7 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
         
         if (received == 0) {
             // Connection closed by client
-            std::cerr << "Connection closed by client\n";
+            aevrix::g_logger.warn("Connection closed by client");
             return false;
         }
 #endif
@@ -269,7 +272,7 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
         
         // Check if we've hit configured limits
         if (parser.has_error()) {
-            std::cerr << "Parser error: " << parser.error_message() << "\n";
+            aevrix::g_logger.error("Parser error: " + parser.error_message());
             // Send 400 Bad Request for parsing errors
             send_error_response(client_fd, StatusCode::BadRequest, parser.error_message());
             return false;
@@ -341,7 +344,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
         return response;
     } catch (const std::exception& e) {
         // Router returned an error, fall back to static file serving
-        std::cerr << "Router error: " << e.what() << ", falling back to static file serving\n";
+        aevrix::g_logger.warn("Router error: " + std::string(e.what()) + ", falling back to static file serving");
     }
     
     // No route found or router error, fall back to static file serving
@@ -454,7 +457,8 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
     static uint64_t connection_counter = 0;
     aevrix::Connection connection(client_fd, ++connection_counter);
     
-    std::cout << "Handling client connection (ID: " << connection.id() << ")...\n";
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, connection.id(), 
+                                         "Handling client connection");
 
     try {
         int request_count = 0;
@@ -468,7 +472,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
         while (keep_alive) {
             request_count++;
             connection.increment_request_id();
-            std::cout << "Processing request " << request_count << " on connection " << connection.id() << "\n";
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::INFO, connection.id(), connection.request_id(),
+                                             "Processing request " + std::to_string(request_count));
+            
+            // Track request start time for access logging
+            auto request_start = std::chrono::high_resolution_clock::now();
             
             // Update activity timestamp
             connection.update_activity();
@@ -476,21 +484,24 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             // Parse the HTTP request with partial read handling
             if (!receive_request(client_fd, connection.parser())) {
                 // receive_request already handles error responses
-                std::cout << "Request " << request_count << " failed, closing connection\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::WARN, connection.id(), connection.request_id(),
+                                                 "Request failed, closing connection");
                 connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
 
             // Check if parsing completed
             if (!connection.is_request_complete()) {
-                std::cerr << "Request parsing incomplete\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::ERR, connection.id(), connection.request_id(),
+                                                 "Request parsing incomplete");
                 connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
 
             // Check for parse errors
             if (connection.has_parse_error()) {
-                std::cerr << "Request parsing error\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::ERR, connection.id(), connection.request_id(),
+                                                 "Request parsing error");
                 connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
@@ -498,10 +509,14 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             // Get the parsed request
             const HttpRequest& request = connection.parser().request();
             
-            std::cout << "Parsed request: " << request.request_line() << "\n";
-            std::cout << "Method: " << aevrix::http::http_method_to_string(request.method()) << "\n";
-            std::cout << "Target: " << request.target() << "\n";
-            std::cout << "Headers: " << request.headers().size() << "\n";
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Parsed request: " + request.request_line());
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Method: " + aevrix::http::http_method_to_string(request.method()));
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Target: " + request.target());
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Headers: " + std::to_string(request.headers().size()));
 
             // Evaluate keep-alive policy
             connection.evaluate_keep_alive(request);
@@ -514,18 +529,21 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             
             // Check if we should keep the connection alive
             keep_alive = connection.keep_alive();
-            std::cout << "Keep-alive: " << (keep_alive ? "yes" : "no") << "\n";
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Keep-alive: " + std::string(keep_alive ? "yes" : "no"));
             
             // Serialize the response
             std::string serialized_response = HttpResponseSerializer::serialize(response);
             
             if (serialized_response.empty()) {
-                std::cerr << "Failed to serialize response\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::ERR, connection.id(), connection.request_id(),
+                                                 "Failed to serialize response");
                 connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
 
-            std::cout << "Sending response (" << serialized_response.length() << " bytes)...\n";
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Sending response (" + std::to_string(serialized_response.length()) + " bytes)");
 
             // Set writing state
             connection.set_state(aevrix::ConnectionState::Writing);
@@ -533,10 +551,22 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
 
             // Send the response with partial write handling
             if (send_response(client_fd, serialized_response.c_str(), serialized_response.length())) {
-                std::cout << "Response sent successfully\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                                 "Response sent successfully");
                 connection.set_write_state(aevrix::WriteState::Complete);
+                
+                // Log access with timing
+                auto request_end = std::chrono::high_resolution_clock::now();
+                auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(request_end - request_start).count();
+                aevrix::g_logger.access(connection.id(), connection.request_id(),
+                                       aevrix::http::http_method_to_string(request.method()),
+                                       request.target(),
+                                       static_cast<int>(response.status()),
+                                       response.body().size(),
+                                       static_cast<uint64_t>(duration_us));
             } else {
-                std::cerr << "Failed to send response\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::ERR, connection.id(), connection.request_id(),
+                                                 "Failed to send response");
                 connection.set_write_state(aevrix::WriteState::Error);
                 break;
             }
@@ -546,7 +576,8 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             
             // If not keep-alive, break the loop
             if (!keep_alive) {
-                std::cout << "Connection will be closed after this response\n";
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                                 "Connection will be closed after this response");
                 connection.set_state(aevrix::ConnectionState::Closing);
                 break;
             }
@@ -556,17 +587,23 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
             connection.set_read_state(aevrix::ReadState::Idle);
             connection.set_write_state(aevrix::WriteState::Idle);
             
-            std::cout << "Waiting for next request on same connection...\n";
+            aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, connection.id(), connection.request_id(),
+                                             "Waiting for next request on same connection");
         }
         
-        std::cout << "Connection " << connection.id() << " handled " << request_count << " request(s)\n";
-        std::cout << "Connection age: " << connection.age().count() << "ms\n";
-        std::cout << "Time since last activity: " << connection.time_since_activity().count() << "ms\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, connection.id(),
+                                           "Handled " + std::to_string(request_count) + " request(s)");
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, connection.id(),
+                                           "Connection age: " + std::to_string(connection.age().count()) + "ms");
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, connection.id(),
+                                           "Time since last activity: " + std::to_string(connection.time_since_activity().count()) + "ms");
 
     } catch (const std::exception& e) {
-        std::cerr << "Exception in handle_connection: " << e.what() << "\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, connection.id(),
+                                           "Exception in handle_connection: " + std::string(e.what()));
     } catch (...) {
-        std::cerr << "Unknown exception in handle_connection\n";
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, connection.id(),
+                                           "Unknown exception in handle_connection");
     }
 
     // Close the client connection using UniqueFd for automatic cleanup
@@ -574,7 +611,7 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
     // client_unique_fd will automatically close the descriptor when it goes out of scope
     
     connection.set_state(aevrix::ConnectionState::Closed);
-    std::cout << "Connection " << connection.id() << " closed\n";
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, connection.id(), "Connection closed");
 }
 
 /**
@@ -595,11 +632,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 13 ===\n";
+    aevrix::g_logger.info("=== Aevrix HTTP Server - Phase 14 ===");
 #ifdef __linux__
-    std::cout << "Configuration System with epoll (Linux)\n\n";
+    aevrix::g_logger.info("Configuration System with epoll (Linux)");
 #else
-    std::cout << "Configuration System (Windows/Unix fallback for development)\n\n";
+    aevrix::g_logger.info("Configuration System (Windows/Unix fallback for development)");
 #endif
 
 #ifdef _WIN32
@@ -607,18 +644,18 @@ int main(int argc, char* argv[]) {
     WSADATA wsa_data;
     int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
     if (result != 0) {
-        std::cerr << "WSAStartup failed: " << result << "\n";
+        aevrix::g_logger.error("WSAStartup failed: " + std::to_string(result));
         return 1;
     }
 #endif
 
     try {
-        std::cout << "Parsing arguments...\n";
+        aevrix::g_logger.info("Parsing arguments...");
         // Parse command-line arguments
         std::string config_file;
         std::string document_root;
         if (!parse_arguments(argc, argv, config_file, document_root)) {
-            std::cout << "Argument parsing failed\n";
+            aevrix::g_logger.error("Argument parsing failed");
 #ifdef _WIN32
             WSACleanup();
 #endif
@@ -630,7 +667,7 @@ int main(int argc, char* argv[]) {
         
         // Load configuration from file if specified
         if (!config_file.empty()) {
-            std::cout << "Loading configuration from file: " << config_file << "\n";
+            aevrix::g_logger.info("Loading configuration from file: " + config_file);
             aevrix::ConfigParser parser;
             parser.parse_file(config_file);
             config.load_from_parser(parser);
@@ -641,24 +678,23 @@ int main(int argc, char* argv[]) {
             config.set_document_root(document_root);
         }
 
-        std::cout << "Attempting to create static file server with root: " << config.document_root() << "\n";
+        aevrix::g_logger.info("Attempting to create static file server with root: " + config.document_root());
 
         // Create static file server
         aevrix::StaticFileServer file_server(config.document_root());
 
-        std::cout << "Static file server created successfully\n";
+        aevrix::g_logger.info("Static file server created successfully");
 
         // Create TCP listener on configured host:port
         aevrix::TcpListener listener(config.host(), config.port());
         
         if (!listener.is_listening()) {
-            std::cerr << "Failed to start TCP listener\n";
-            std::cerr << "Error: " << listener.error_message() << "\n";
+            aevrix::g_logger.error("Failed to start TCP listener: " + listener.error_message());
             return 1;
         }
 
-        std::cout << "\nServer running on http://" << listener.host() << ":" << listener.port() << "/\n";
-        std::cout << "Serving files from: " << file_server.document_root() << "\n";
+        aevrix::g_logger.info("Server running on http://" + listener.host() + ":" + std::to_string(listener.port()) + "/");
+        aevrix::g_logger.info("Serving files from: " + file_server.document_root());
         
         // Create worker pool for blocking operations
         // Use configured number of workers and queue size
@@ -699,14 +735,14 @@ int main(int argc, char* argv[]) {
         });
         
 #ifdef __linux__
-        std::cout << "Using configuration system with epoll event loop\n";
+        aevrix::g_logger.info("Using configuration system with epoll event loop");
 #else
-        std::cout << "Using configuration system (Windows/Unix fallback)\n";
-        std::cout << "Keep-alive connections enabled\n";
+        aevrix::g_logger.info("Using configuration system (Windows/Unix fallback)");
+        aevrix::g_logger.info("Keep-alive connections enabled");
 #endif
         
-        std::cout << config.summary() << "\n";
-        std::cout << "Press Ctrl+C to stop\n\n";
+        aevrix::g_logger.info(config.summary());
+        aevrix::g_logger.info("Press Ctrl+C to stop");
 
         // Main server loop
         // Phase 11: Use epoll event loop on Linux, blocking loop on Windows/Unix
@@ -724,7 +760,7 @@ int main(int argc, char* argv[]) {
             // Set listener to non-blocking mode
             listener.stop();  // Stop current blocking listener
             if (!listener.start(host, port, true)) {  // Start with non-blocking
-                std::cerr << "Failed to start non-blocking listener\n";
+                aevrix::g_logger.error("Failed to start non-blocking listener");
                 return 1;
             }
             
@@ -737,25 +773,26 @@ int main(int argc, char* argv[]) {
                         if (client_fd.has_value()) {
                             handle_connection(client_fd.value(), file_server, config, worker_pool, router);
                             connection_count++;
-                            std::cout << "Total connections handled: " << connection_count << "\n\n";
+                            aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
                         }
                     }
                 })) {
-                std::cerr << "Failed to add listener to event loop\n";
+                aevrix::g_logger.error("Failed to add listener to event loop");
                 return 1;
             }
             
-            std::cout << "Starting event loop...\n";
+            aevrix::g_logger.info("Starting event loop...");
             event_loop.run();
             
         } catch (const std::exception& e) {
-            std::cerr << "Event loop error: " << e.what() << "\n";
+            aevrix::g_logger.error("Event loop error: " + std::string(e.what()));
             return 1;
         }
 #else
         // Windows/Unix: Use blocking loop for development
+        aevrix::g_logger.info("Using blocking loop for development");
         while (true) {
-            std::cout << "Waiting for connection...\n";
+            aevrix::g_logger.info("Waiting for connection...");
 
             // Accept a connection (blocking call)
             auto client_fd = listener.accept();
@@ -764,20 +801,20 @@ int main(int argc, char* argv[]) {
                 // Handle the connection with static file serving
                 handle_connection(client_fd.value(), file_server, config, worker_pool, router);
                 connection_count++;
-                std::cout << "Total connections handled: " << connection_count << "\n\n";
+                aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
             } else {
-                std::cerr << "Failed to accept connection\n";
+                aevrix::g_logger.error("Failed to accept connection");
                 break;
             }
         }
 #endif
 
-        std::cout << "\nServer stopping...\n";
+        aevrix::g_logger.info("Server stopping...");
 
         // Stop the listener (will close the listening socket)
         listener.stop();
 
-        std::cout << "Server stopped gracefully\n";
+        aevrix::g_logger.info("Server stopped gracefully");
 
 #ifdef _WIN32
         WSACleanup();
@@ -785,13 +822,13 @@ int main(int argc, char* argv[]) {
         return 0;
 
     } catch (const std::exception& e) {
-        std::cerr << "Exception: " << e.what() << "\n";
+        aevrix::g_logger.error("Exception: " + std::string(e.what()));
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     } catch (...) {
-        std::cerr << "Unknown exception occurred\n";
+        aevrix::g_logger.error("Unknown exception occurred");
 #ifdef _WIN32
         WSACleanup();
 #endif

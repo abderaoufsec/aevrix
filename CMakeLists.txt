@@ -104,6 +104,11 @@ enable_testing()
 # - Configuration system
 # - Uses config_parser.h
 # - src/config_parser.cpp
+#
+# Phase 14 adds:
+# - Structured logging
+# - Uses logger.h
+# - src/logger.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -115,6 +120,7 @@ add_executable(aevrix
     src/server_config.cpp
     src/router.cpp
     src/config_parser.cpp
+    src/logger.cpp
 )
 
 # Threading support for worker pool
