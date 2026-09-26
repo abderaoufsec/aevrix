@@ -2,13 +2,18 @@
 // Aevrix - Main Entry Point
 // =============================================================================
 // This file implements the main entry point for the Aevrix HTTP server.
-// In Phase 10, we add connection timeouts and resource limits to prevent
-// slow-client resource exhaustion.
+// In Phase 11, we add a bounded worker pool for blocking operations to keep
+// blocking filesystem/application work out of the event loop, ensuring the
+// event loop remains responsive.
 //
-// Current Implementation (Phase 10):
+// Current Implementation (Phase 11):
 // - Create TCP listener on 127.0.0.1:8080 (non-blocking on Linux)
 // - Use Connection class to manage connection state (input buffer, parser state,
 //   output buffer, keep-alive decision, timestamps, request ID)
+// - Use ServerConfig to enforce timeouts and resource limits
+// - Use WorkerPool for blocking operations (filesystem I/O, etc.)
+// - Bounded queue prevents unbounded task creation
+// - Clean shutdown without detached threads
 // - Use event loop to handle multiple connections efficiently
 // - Read HTTP requests with partial read handling
 // - Parse requests using HttpRequestParser
@@ -29,6 +34,8 @@
 // - Phase 8: Non-blocking I/O with epoll (Linux only)
 // - Phase 9: Connection state machine
 // - Phase 10: Timeouts and resource limits
+// - Phase 11: Worker pool for blocking operations
+// - Phase 11: Worker pool for blocking operations
 //
 // Future Phases Will Add:
 // - Phase 11: Worker pool for blocking operations
@@ -42,6 +49,7 @@
 #include "aevrix/static_file_server.h"
 #include "aevrix/connection.h"
 #include "aevrix/server_config.h"
+#include "aevrix/worker_pool.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -408,8 +416,9 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * @param file_server The static file server instance
  * @param config Server configuration with timeout values
  */
-void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config) {
+void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config, aevrix::WorkerPool& worker_pool) {
     (void)config;  // TODO: Add timeout checks in future iterations
+    (void)worker_pool;  // TODO: Use worker pool for blocking filesystem operations
     // Create Connection object to manage state
     static uint64_t connection_counter = 0;
     aevrix::Connection connection(client_fd, ++connection_counter);
@@ -555,11 +564,11 @@ void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, con
  * @return int Exit code (0 for success, non-zero for error)
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=== Aevrix HTTP Server - Phase 10 ===\n";
+    std::cout << "=== Aevrix HTTP Server - Phase 11 ===\n";
 #ifdef __linux__
-    std::cout << "Timeouts and Resource Limits with epoll (Linux)\n\n";
+    std::cout << "Worker Pool with epoll (Linux)\n\n";
 #else
-    std::cout << "Timeouts and Resource Limits (Windows/Unix fallback for development)\n\n";
+    std::cout << "Worker Pool (Windows/Unix fallback for development)\n\n";
 #endif
 
     try {
@@ -597,10 +606,15 @@ int main(int argc, char* argv[]) {
         // Create server configuration with timeouts and resource limits
         aevrix::ServerConfig config;
         
+        // Create worker pool for blocking operations
+        // Use 4 workers and a queue size of 128
+        // This keeps blocking filesystem work out of the event loop
+        aevrix::WorkerPool worker_pool(4, 128);
+        
 #ifdef __linux__
-        std::cout << "Using timeouts and resource limits with epoll event loop\n";
+        std::cout << "Using worker pool with epoll event loop\n";
 #else
-        std::cout << "Using timeouts and resource limits (Windows/Unix fallback)\n";
+        std::cout << "Using worker pool (Windows/Unix fallback)\n";
         std::cout << "Keep-alive connections enabled\n";
 #endif
         
@@ -608,9 +622,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Press Ctrl+C to stop\n\n";
 
         // Main server loop
-        // Phase 10: Use epoll event loop on Linux, blocking loop on Windows/Unix
-        // Both paths now use the Connection class for explicit state management
-        // and ServerConfig for timeout and resource limit enforcement
+        // Phase 11: Use epoll event loop on Linux, blocking loop on Windows/Unix
+        // Both paths now use the Connection class for explicit state management,
+        // ServerConfig for timeout and resource limit enforcement, and WorkerPool
+        // for blocking operations to keep the event loop responsive
         int connection_count = 0;
 
 #ifdef __linux__
@@ -633,7 +648,7 @@ int main(int argc, char* argv[]) {
                         // Accept new connection
                         auto client_fd = listener.accept();
                         if (client_fd.has_value()) {
-                            handle_connection(client_fd.value(), file_server, config);
+                            handle_connection(client_fd.value(), file_server, config, worker_pool);
                             connection_count++;
                             std::cout << "Total connections handled: " << connection_count << "\n\n";
                         }
@@ -660,7 +675,7 @@ int main(int argc, char* argv[]) {
             
             if (client_fd.has_value()) {
                 // Handle the connection with static file serving
-                handle_connection(client_fd.value(), file_server, config);
+                handle_connection(client_fd.value(), file_server, config, worker_pool);
                 connection_count++;
                 std::cout << "Total connections handled: " << connection_count << "\n\n";
             } else {

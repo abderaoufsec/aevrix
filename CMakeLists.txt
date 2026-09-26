@@ -27,6 +27,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Find threading support for worker pool
+find_package(Threads REQUIRED)
+
 # =============================================================================
 # Compiler Warning Configuration
 # =============================================================================
@@ -86,6 +89,11 @@ enable_testing()
 # - Timeouts and resource limits
 # - Uses server_config.h
 # - src/server_config.cpp
+#
+# Phase 11 adds:
+# - Worker pool for blocking operations
+# - Uses worker_pool.h
+# - Requires threading support
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -96,6 +104,9 @@ add_executable(aevrix
     src/connection.cpp
     src/server_config.cpp
 )
+
+# Threading support for worker pool
+target_link_libraries(aevrix PRIVATE Threads::Threads)
 
 # Ensure main executable can find aevrix headers
 target_include_directories(aevrix PRIVATE ${PROJECT_SOURCE_DIR}/include)
