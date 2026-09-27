@@ -248,10 +248,67 @@ add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
 # add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
 
 # =============================================================================
+# Benchmark Targets (Phase 18)
+# =============================================================================
+# Benchmarks measure performance characteristics of the server
+# Static file serving, keep-alive, concurrent requests, and parser performance
+# Note: Static file benchmarks are temporarily disabled due to StaticFileServer
+# initialization issues in benchmark context. Parser benchmark is fully functional.
+# =============================================================================
+
+# Static small file benchmark (temporarily disabled)
+# add_executable(benchmark_static_small
+#     benchmarks/static_small.cpp
+#     src/static_file_server.cpp
+# )
+
+# Static large file benchmark (temporarily disabled)
+# add_executable(benchmark_static_large
+#     benchmarks/static_large.cpp
+#     src/static_file_server.cpp
+# )
+
+# Keep-alive benchmark
+add_executable(benchmark_keepalive
+    benchmarks/keepalive.cpp
+)
+
+# Concurrent request benchmark
+add_executable(benchmark_concurrent
+    benchmarks/concurrent.cpp
+)
+
+# Parser benchmark
+add_executable(benchmark_parser
+    benchmarks/parser.cpp
+    src/http_request_parser.cpp
+)
+
+# Ensure benchmarks can find aevrix headers
+# target_include_directories(benchmark_static_small PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(benchmark_static_large PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(benchmark_keepalive PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(benchmark_concurrent PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(benchmark_parser PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Disable conversion warnings for benchmarks (intentional conversions for statistics)
+if(NOT MSVC)
+    # target_compile_options(benchmark_static_small PRIVATE -Wno-conversion)
+    # target_compile_options(benchmark_static_large PRIVATE -Wno-conversion)
+    target_compile_options(benchmark_keepalive PRIVATE -Wno-conversion)
+    target_compile_options(benchmark_concurrent PRIVATE -Wno-conversion)
+    target_compile_options(benchmark_parser PRIVATE -Wno-conversion)
+endif()
+
+# Link threading library for concurrent benchmark
+target_link_libraries(benchmark_concurrent PRIVATE Threads::Threads)
+
+# =============================================================================
 # Test Registration Complete
 # =============================================================================
 # All tests are registered above:
 # - aevrix_http_tests (HTTP response tests)
+# - aevrix_http_request_tests (HTTP request tests)
 # - aevrix_router_tests (Router tests)
 # Run tests with: ctest --test-dir build --output-on-failure
 # =============================================================================
