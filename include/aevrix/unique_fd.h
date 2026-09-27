@@ -37,7 +37,7 @@
 #define CLOSE_FD _close
 #else
 #include <unistd.h>   // For close() on Unix/Linux
-#define CLOSE_FD close
+#define CLOSE_FD ::close  // Use scoped call to avoid conflicts with class method names
 #endif
 
 namespace aevrix {

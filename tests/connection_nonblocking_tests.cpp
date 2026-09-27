@@ -88,7 +88,7 @@ void close_socket(int fd) {
 #ifdef _WIN32
     closesocket(fd);
 #else
-    close(fd);
+    ::close(fd);
 #endif
 }
 

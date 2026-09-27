@@ -311,7 +311,7 @@ bool TcpListener::start(const std::string& host, uint16_t port, bool non_blockin
 #ifdef _WIN32
         closesocket(sock);
 #else
-        close(sock);
+        ::close(sock);
 #endif
         return false;
     }
@@ -322,7 +322,7 @@ bool TcpListener::start(const std::string& host, uint16_t port, bool non_blockin
 #ifdef _WIN32
             closesocket(sock);
 #else
-            close(sock);
+            ::close(sock);
 #endif
             return false;
         }
@@ -333,7 +333,7 @@ bool TcpListener::start(const std::string& host, uint16_t port, bool non_blockin
 #ifdef _WIN32
         closesocket(sock);
 #else
-        close(sock);
+        ::close(sock);
 #endif
         return false;
     }
@@ -343,7 +343,7 @@ bool TcpListener::start(const std::string& host, uint16_t port, bool non_blockin
 #ifdef _WIN32
         closesocket(sock);
 #else
-        close(sock);
+        ::close(sock);
 #endif
         return false;
     }
@@ -424,7 +424,7 @@ std::optional<int> TcpListener::accept() {
 #ifdef _WIN32
         closesocket(client_sock);
 #else
-        close(client_fd);
+        ::close(client_fd);
 #endif
         return std::nullopt;
     }

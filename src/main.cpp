@@ -85,6 +85,7 @@ using aevrix::http::HttpRequestParser;
 #else
 #include <unistd.h>
 #include <cerrno>
+#include <string.h>  // For strerror on Linux
 #endif
 
 // Use the http namespace for convenience
@@ -767,15 +768,15 @@ int main(int argc, char* argv[]) {
             
             // Set listener to non-blocking mode
             listener.stop();  // Stop current blocking listener
-            if (!listener.start(host, port, true)) {  // Start with non-blocking
+            if (!listener.start(config.host(), config.port(), true)) {  // Start with non-blocking
                 aevrix::g_logger.error("Failed to start non-blocking listener");
                 return 1;
             }
             
             // Add listener socket to event loop
             if (!event_loop.add_fd(listener.get_socket(), EPOLLIN, 
-                [&, file_server = std::ref(file_server)](int fd, EventType event) {
-                    if (event == EventType::Readable) {
+                [&, file_server = std::ref(file_server)](int fd, aevrix::EventType event) {
+                    if (event == aevrix::EventType::Readable) {
                         // Accept new connection
                         auto client_fd = listener.accept();
                         if (client_fd.has_value()) {

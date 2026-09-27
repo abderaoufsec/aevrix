@@ -54,7 +54,7 @@ EventLoop::EventLoop() : running_(false) {
 EventLoop::~EventLoop() {
 #ifdef AEVRIX_USE_EPOLL
     if (epoll_fd_ >= 0) {
-        close(epoll_fd_);
+        ::close(epoll_fd_);
     }
     if (events_) {
         delete[] events_;
@@ -84,7 +84,7 @@ EventLoop& EventLoop::operator=(EventLoop&& other) noexcept {
         running_ = other.running_;
 #ifdef AEVRIX_USE_EPOLL
         if (epoll_fd_ >= 0) {
-            close(epoll_fd_);
+            ::close(epoll_fd_);
         }
         if (events_) {
             delete[] events_;

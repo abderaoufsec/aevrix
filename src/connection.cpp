@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cerrno>
+#include <string.h>  // For strerror on Linux
+#include <errno.h>    // For errno on Linux
 
 #ifdef _WIN32
 #include <winsock2.h>
