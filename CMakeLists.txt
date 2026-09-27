@@ -166,6 +166,14 @@ enable_testing()
 # - HTTP cache control utilities
 # - Uses http_cache.h
 # - src/http_cache.cpp
+#
+# Phase 20 adds:
+# - Metrics collection system
+# - Uses metrics.h
+# - src/metrics.cpp
+# - Observability endpoints
+# - Uses observability.h
+# - src/observability.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -180,6 +188,8 @@ add_executable(aevrix
     src/logger.cpp
     src/signal_handler.cpp
     src/http_cache.cpp
+    src/metrics.cpp
+    src/observability.cpp
 )
 
 # Threading support for worker pool
@@ -227,6 +237,12 @@ add_executable(aevrix_http_cache_tests
     src/http_cache.cpp
 )
 
+# Metrics tests (enabled in Phase 20)
+add_executable(aevrix_metrics_tests
+    tests/metrics_tests.cpp
+    src/metrics.cpp
+)
+
 # Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
 # add_executable(aevrix_path_security_tests
 #     tests/path_security_tests.cpp
@@ -238,6 +254,7 @@ target_include_directories(aevrix_router_tests PRIVATE ${PROJECT_SOURCE_DIR}/inc
 target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_request_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_cache_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_metrics_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 # target_include_directories(aevrix_path_security_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Link Windows socket library on Windows (for test file operations)
@@ -245,6 +262,8 @@ if(WIN32)
     target_link_libraries(aevrix_router_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_http_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_http_request_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_http_cache_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_metrics_tests PRIVATE ws2_32 Threads::Threads)
     # target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
 endif()
 
@@ -256,6 +275,9 @@ add_test(NAME aevrix_http_request_tests COMMAND aevrix_http_request_tests)
 
 # Register HTTP cache tests (enabled in Phase 19)
 add_test(NAME aevrix_http_cache_tests COMMAND aevrix_http_cache_tests)
+
+# Register metrics tests (enabled in Phase 20)
+add_test(NAME aevrix_metrics_tests COMMAND aevrix_metrics_tests)
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
