@@ -243,6 +243,16 @@ add_executable(aevrix_metrics_tests
     src/metrics.cpp
 )
 
+# Connection nonblocking I/O tests (Stage 1 - Event-Driven Refactor)
+add_executable(aevrix_connection_nonblocking_tests
+    tests/connection_nonblocking_tests.cpp
+    src/connection.cpp
+    src/logger.cpp
+)
+
+# Ensure connection nonblocking tests can find aevrix headers
+target_include_directories(aevrix_connection_nonblocking_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
 # Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
 # add_executable(aevrix_path_security_tests
 #     tests/path_security_tests.cpp
@@ -264,6 +274,7 @@ if(WIN32)
     target_link_libraries(aevrix_http_request_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_http_cache_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_metrics_tests PRIVATE ws2_32 Threads::Threads)
+    target_link_libraries(aevrix_connection_nonblocking_tests PRIVATE ws2_32)
     # target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
 endif()
 
@@ -278,6 +289,9 @@ add_test(NAME aevrix_http_cache_tests COMMAND aevrix_http_cache_tests)
 
 # Register metrics tests (enabled in Phase 20)
 add_test(NAME aevrix_metrics_tests COMMAND aevrix_metrics_tests)
+
+# Register connection nonblocking tests (Stage 1 - Event-Driven Refactor)
+add_test(NAME aevrix_connection_nonblocking_tests COMMAND aevrix_connection_nonblocking_tests)
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)

@@ -307,6 +307,17 @@ private:
     bool set_non_blocking(socket_type sock);
 
     /**
+     * @brief Static helper to set any socket to non-blocking mode
+     * 
+     * This is a static helper that can be used for accepted client sockets
+     * to set them to non-blocking mode without requiring a TcpListener instance.
+     * 
+     * @param fd The file descriptor to configure
+     * @return true if successful, false on error
+     */
+    static bool set_fd_non_blocking(int fd);
+
+    /**
      * @brief Convert hostname to address structure
      * 
      * Converts a hostname or IP string to a sockaddr_in structure.

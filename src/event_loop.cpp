@@ -106,32 +106,32 @@ EventLoop& EventLoop::operator=(EventLoop&& other) noexcept {
 }
 
 bool EventLoop::add_fd(int fd, uint32_t events, EventCallback callback) {
-    (void)events;  // Unused in select implementation
 #ifdef AEVRIX_USE_EPOLL
     struct epoll_event ev;
     ev.events = events;
     ev.data.fd = fd;
     
-    // Store callback (in a real implementation, we'd use a map)
-    // For Phase 8, we'll use a simple approach
+    // Store callback for this fd
+    fd_callbacks_[fd] = callback;
     
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev) < 0) {
-        std::cerr << "Failed to add fd to epoll: " << strerror(errno) << "\n";
+        aevrix::g_logger.error("Failed to add fd to epoll: " + std::string(strerror(errno)));
         return false;
     }
     
-    std::cout << "Added fd " << fd << " to epoll with events: " << events << "\n";
+    aevrix::g_logger.debug("Added fd " + std::to_string(fd) + " to epoll with events: " + std::to_string(events));
     return true;
     
 #elif defined(AEVRIX_USE_SELECT)
     // Add to select-based tracking
+    (void)events;  // Select doesn't use event bitmask in add_fd
     fd_callbacks_.push_back({fd, callback});
     
     if (fd > max_fd_) {
         max_fd_ = fd;
     }
     
-    std::cout << "Added fd " << fd << " to select event loop\n";
+    aevrix::g_logger.debug("Added fd " + std::to_string(fd) + " to select event loop");
     return true;
 #endif
 }
@@ -144,16 +144,16 @@ bool EventLoop::modify_fd(int fd, uint32_t events) {
     ev.data.fd = fd;
     
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) < 0) {
-        std::cerr << "Failed to modify fd in epoll: " << strerror(errno) << "\n";
+        aevrix::g_logger.error("Failed to modify fd in epoll: " + std::string(strerror(errno)));
         return false;
     }
     
-    std::cout << "Modified fd " << fd << " in epoll with events: " << events << "\n";
+    aevrix::g_logger.debug("Modified fd " + std::to_string(fd) + " in epoll with events: " + std::to_string(events));
     return true;
     
 #elif defined(AEVRIX_USE_SELECT)
     // For select, we don't need to modify - we check on each iteration
-    std::cout << "Modified fd " << fd << " in select event loop\n";
+    aevrix::g_logger.debug("Modified fd " + std::to_string(fd) + " in select event loop");
     return true;
 #endif
 }
@@ -161,11 +161,14 @@ bool EventLoop::modify_fd(int fd, uint32_t events) {
 bool EventLoop::remove_fd(int fd) {
 #ifdef AEVRIX_USE_EPOLL
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
-        std::cerr << "Failed to remove fd from epoll: " << strerror(errno) << "\n";
+        aevrix::g_logger.error("Failed to remove fd from epoll: " + std::string(strerror(errno)));
         return false;
     }
     
-    std::cout << "Removed fd " << fd << " from epoll\n";
+    // Remove callback
+    fd_callbacks_.erase(fd);
+    
+    aevrix::g_logger.debug("Removed fd " + std::to_string(fd) + " from epoll");
     return true;
     
 #elif defined(AEVRIX_USE_SELECT)
@@ -184,7 +187,7 @@ bool EventLoop::remove_fd(int fd) {
         }
     }
     
-    std::cout << "Removed fd " << fd << " from select event loop\n";
+    aevrix::g_logger.debug("Removed fd " + std::to_string(fd) + " from select event loop");
     return true;
 #endif
 }
@@ -230,19 +233,33 @@ bool EventLoop::run(int timeout_ms) {
             int fd = events_[i].data.fd;
             uint32_t revents = events_[i].events;
             
-            // Determine event type
+            // Find callback for this fd
+            auto it = fd_callbacks_.find(fd);
+            if (it == fd_callbacks_.end()) {
+                aevrix::g_logger.warn("No callback registered for fd " + std::to_string(fd));
+                continue;
+            }
+            
+            // Determine event type and invoke callback
             if (revents & EPOLLIN) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " is readable");
-                // In a real implementation, we'd invoke the callback here
+                it->second(fd, EventType::Readable);
             }
             if (revents & EPOLLOUT) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " is writable");
+                it->second(fd, EventType::Writable);
             }
             if (revents & EPOLLERR) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " has error");
+                it->second(fd, EventType::Error);
             }
             if (revents & EPOLLHUP) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " hangup");
+                it->second(fd, EventType::Hangup);
+            }
+            if (revents & EPOLLRDHUP) {
+                aevrix::g_logger.debug("fd " + std::to_string(fd) + " peer closed write end");
+                it->second(fd, EventType::Hangup);
             }
         }
         
@@ -328,7 +345,7 @@ bool EventLoop::shutdown_requested() const {
 
 void EventLoop::stop() {
     running_ = false;
-    std::cout << "Event loop stop requested\n";
+    aevrix::g_logger.info("Event loop stop requested");
 }
 
 } // namespace aevrix

@@ -40,13 +40,14 @@
 #include <functional>
 #include <memory>
 #include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 #ifdef __linux__
 #include <sys/epoll.h>
 #define AEVRIX_USE_EPOLL
 #elif defined(_WIN32)
 #include <winsock2.h>
-#include <vector>
 #define AEVRIX_USE_SELECT
 #else
 #include <sys/select.h>
@@ -178,6 +179,7 @@ private:
     int epoll_fd_;  // epoll file descriptor
     struct epoll_event* events_;  // Array to store returned events
     static constexpr size_t MAX_EVENTS = 1024;  // Maximum events per epoll_wait
+    std::unordered_map<int, EventCallback> fd_callbacks_;  // Callback storage for epoll
 #elif defined(AEVRIX_USE_SELECT)
     // Windows/Unix select implementation
     fd_set read_fds_;

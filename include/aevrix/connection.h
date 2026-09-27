@@ -389,6 +389,41 @@ public:
     void increment_request_id() { ++request_id_; }
 
     // =========================================================================
+    // Nonblocking I/O Operations (Stage 1 - Event-Driven Refactor)
+    // =========================================================================
+
+    /**
+     * @brief Result of a nonblocking I/O operation
+     */
+    enum class IoResult {
+        Success,        // Operation completed successfully
+        InProgress,     // Operation in progress (EAGAIN/EWOULDBLOCK)
+        Error,          // Error occurred, connection should close
+        Closed          // Peer disconnected
+    };
+
+    /**
+     * @brief Perform a nonblocking read from the socket
+     * 
+     * Reads available data into the input buffer without blocking.
+     * Handles EAGAIN/EWOULDBLOCK, EINTR, and socket errors.
+     * 
+     * @return IoResult indicating the operation status
+     */
+    IoResult read_nonblocking();
+
+    /**
+     * @brief Perform a nonblocking write to the socket
+     * 
+     * Writes as much data as possible from the output buffer without blocking.
+     * Handles EAGAIN/EWOULDBLOCK, EINTR, and socket errors.
+     * Updates the output buffer to remove sent data.
+     * 
+     * @return IoResult indicating the operation status
+     */
+    IoResult write_nonblocking();
+
+    // =========================================================================
     // State Validation
     // =========================================================================
 

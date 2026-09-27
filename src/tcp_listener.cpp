@@ -198,6 +198,33 @@ bool TcpListener::set_non_blocking(socket_type sock) {
     return true;
 }
 
+bool TcpListener::set_fd_non_blocking(int fd) {
+#ifdef _WIN32
+    // Windows uses ioctlsocket with FIONBIO
+    SOCKET sock = static_cast<SOCKET>(fd);
+    unsigned long mode = 1;  // Non-blocking mode
+    int result = ioctlsocket(sock, FIONBIO, reinterpret_cast<unsigned long*>(&mode));
+    if (result == SOCKET_ERROR) {
+        std::cerr << "ioctlsocket() failed for fd " << fd << ": " << WSAGetLastError() << "\n";
+        return false;
+    }
+#else
+    // Unix/Linux uses fcntl with O_NONBLOCK
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        std::cerr << "fcntl(F_GETFL) failed for fd " << fd << ": " << strerror(errno) << "\n";
+        return false;
+    }
+    
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        std::cerr << "fcntl(F_SETFL) failed for fd " << fd << ": " << strerror(errno) << "\n";
+        return false;
+    }
+#endif
+    
+    return true;
+}
+
 // =============================================================================
 // Socket Binding
 // =============================================================================
@@ -388,7 +415,19 @@ std::optional<int> TcpListener::accept() {
     char client_ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
     std::cout << "Accepted connection from " << client_ip 
-              << ":" << ntohs(client_addr.sin_port) << "\n";
+              << ":" << ntohs(client_addr.sin_port) << " (fd=" << client_fd << ")\n";
+
+    // Set accepted socket to non-blocking mode for event-driven I/O
+    // This is critical for epoll - accepted sockets must be non-blocking
+    if (!set_fd_non_blocking(client_fd)) {
+        std::cerr << "Failed to set accepted socket to non-blocking mode\n";
+#ifdef _WIN32
+        closesocket(client_sock);
+#else
+        close(client_fd);
+#endif
+        return std::nullopt;
+    }
 
     return client_fd;
 }
