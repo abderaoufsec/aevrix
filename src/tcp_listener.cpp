@@ -172,7 +172,7 @@ bool TcpListener::set_non_blocking(socket_type sock) {
 #ifdef _WIN32
     // Windows uses ioctlsocket with FIONBIO
     unsigned long mode = 1;  // Non-blocking mode
-    int result = ioctlsocket(sock, FIONBIO, &mode);
+    int result = ioctlsocket(sock, FIONBIO, reinterpret_cast<unsigned long*>(&mode));
     if (result == SOCKET_ERROR) {
         last_error_ = WSAGetLastError();
         std::cerr << "ioctlsocket() failed: " << last_error_ << "\n";
@@ -411,7 +411,7 @@ std::string TcpListener::error_message() const {
 #ifdef _WIN32
     char message[256];
     FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                  nullptr, last_error_, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                  nullptr, static_cast<DWORD>(last_error_), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                   message, sizeof(message), nullptr);
     return std::string(message);
 #else

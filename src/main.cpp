@@ -184,7 +184,7 @@ bool send_response(int client_fd, const char* data, size_t length) {
         }
 #endif
         
-        total_sent += sent;
+        total_sent += static_cast<size_t>(sent);
         std::cout << "Sent " << sent << " bytes (" << total_sent << "/" << length << " total)\n";
     }
     
@@ -270,7 +270,7 @@ bool receive_request(int client_fd, HttpRequestParser& parser) {
         std::cout << "Received " << received << " bytes from client\n";
         
         // Feed the received data to the parser
-        parser.feed(buffer, received);
+        parser.feed(buffer, static_cast<size_t>(received));
         
         // Check if we've hit configured limits
         if (parser.has_error()) {

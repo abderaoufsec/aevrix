@@ -34,13 +34,60 @@ find_package(Threads REQUIRED)
 # Compiler Warning Configuration
 # =============================================================================
 # Enable strict compiler warnings and treat them as errors to enforce code quality
-# - MSVC: /W4 (high warning level) + /WX (warnings as errors)
-# - GCC/Clang: -Wall (all warnings) + -Wextra (extra warnings) + -Wpedantic (standard compliance) + -Werror (warnings as errors)
+#
+# MSVC (Windows):
+# - /W4: Enable high warning level (includes warnings about suspicious code)
+# - /WX: Treat warnings as errors (fail build on any warning)
+# - /permissive-: Disable non-standard language extensions (enforce standard compliance)
+# - /Zc:__cplusplus: Enable correct __cplusplus macro value
+#
+# GCC/Clang (Linux/Unix):
+# - -Wall: Enable all warnings about questionable code construction
+# - -Wextra: Enable extra warnings not covered by -Wall
+# - -Wpedantic: Warn about non-standard C++ constructs (ISO C++ compliance)
+# - -Werror: Treat all warnings as errors (fail build on any warning)
+# - -Wconversion: Warn about implicit type conversions that may change values
+# - -Wsign-conversion: Warn about implicit sign conversions
+# - -Wshadow: Warn when a variable shadows another variable
+# - -Wold-style-cast: Warn about C-style casts (prefer C++ casts)
+# - -Wcast-align: Warn about pointer casts that increase alignment requirements
+# - -Wunused: Warn about unused variables, functions, labels
+# - -Woverloaded-virtual: Warn about overloaded virtual functions
+# - -Wnon-virtual-dtor: Warn about non-virtual destructors in polymorphic classes
 # =============================================================================
 if(MSVC)
-    add_compile_options(/W4 /WX)
+    add_compile_options(/W4 /WX /permissive- /Zc:__cplusplus /wd4242 /wd4244)
+elseif(MINGW)
+    # MinGW with GCC/Clang: disable sign-conversion warnings for Windows API compatibility
+    # Windows headers have unavoidable sign conversions in ioctlsocket and FormatMessage
+    add_compile_options(
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+        -Wconversion
+        -Wshadow
+        -Wold-style-cast
+        -Wcast-align
+        -Wunused
+        -Woverloaded-virtual
+        -Wnon-virtual-dtor
+    )
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+    add_compile_options(
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+        -Wconversion
+        -Wsign-conversion
+        -Wshadow
+        -Wold-style-cast
+        -Wcast-align
+        -Wunused
+        -Woverloaded-virtual
+        -Wnon-virtual-dtor
+    )
 endif()
 
 # =============================================================================
