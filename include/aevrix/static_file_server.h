@@ -97,9 +97,17 @@ public:
      */
     bool is_path_safe(const std::string& request_target) const;
 
-private:
     /**
-     * @brief Normalize a request target path
+     * @brief Check if a path is valid and safe (with explicit document root for testing)
+     * 
+     * @param request_target The path to validate
+     * @param document_root The document root to validate against
+     * @return true if the path is safe, false otherwise
+     */
+    static bool is_path_safe(const std::string& request_target, const std::string& document_root);
+
+    /**
+     * @brief Normalize a request target path (public for testing)
      * 
      * Converts URL-encoded characters, removes redundant separators,
      * and resolves relative path components. This is critical for
@@ -110,6 +118,7 @@ private:
      */
     std::string normalize_path(const std::string& path) const;
 
+private:
     /**
      * @brief Decode URL-encoded characters in a path
      * 

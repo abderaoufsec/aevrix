@@ -114,6 +114,16 @@ bool StaticFileServer::is_path_safe(const std::string& request_target) const {
     }
 }
 
+bool StaticFileServer::is_path_safe(const std::string& request_target, const std::string& document_root) {
+    try {
+        // Create a temporary StaticFileServer instance to use its methods
+        StaticFileServer temp_server(document_root);
+        return temp_server.is_path_safe(request_target);
+    } catch (...) {
+        return false;
+    }
+}
+
 std::string StaticFileServer::normalize_path(const std::string& path) const {
     // URL decode the path first
     std::string decoded = url_decode(path);

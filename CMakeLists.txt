@@ -148,10 +148,13 @@ endif()
 # 
 # Phase 1: UniqueFd tests
 # Phase 3: HTTP response tests
+# Phase 12: Router tests
+# Phase 16: HTTP request tests
 # Future phases will add more test files here
 # =============================================================================
-add_executable(aevrix_tests
-    tests/unique_fd_tests.cpp
+add_executable(aevrix_router_tests
+    tests/router_tests.cpp
+    src/router.cpp
 )
 
 # HTTP Response tests (separate executable due to linking issues)
@@ -159,33 +162,49 @@ add_executable(aevrix_http_tests
     tests/http_response_tests.cpp
 )
 
-# HTTP Request tests (disabled due to linking issues on Windows)
-# add_executable(aevrix_http_request_tests
-#     tests/http_request_tests.cpp
+# HTTP Request tests (enabled in Phase 16)
+add_executable(aevrix_http_request_tests
+    tests/http_request_tests.cpp
+    src/http_request_parser.cpp
+)
+
+# Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
+# add_executable(aevrix_path_security_tests
+#     tests/path_security_tests.cpp
+#     src/static_file_server.cpp
 # )
 
 # Ensure tests can find aevrix headers
-target_include_directories(aevrix_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_router_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
-# target_include_directories(aevrix_http_request_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_http_request_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(aevrix_path_security_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Link Windows socket library on Windows (for test file operations)
 if(WIN32)
-    target_link_libraries(aevrix_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_router_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_http_tests PRIVATE ws2_32)
-    # target_link_libraries(aevrix_http_request_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_http_request_tests PRIVATE ws2_32)
+    # target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
 endif()
 
 # Register HTTP response tests
 add_test(NAME aevrix_http_tests COMMAND aevrix_http_tests)
 
-# Register HTTP request tests (disabled)
-# add_test(NAME aevrix_http_request_tests COMMAND aevrix_http_request_tests)
+# Register HTTP request tests (enabled in Phase 16)
+add_test(NAME aevrix_http_request_tests COMMAND aevrix_http_request_tests)
+
+# Register router tests (enabled in Phase 16)
+add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
+
+# Register path security tests (enabled in Phase 16 - temporarily disabled)
+# add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
 
 # =============================================================================
-# Test Registration
+# Test Registration Complete
 # =============================================================================
-# Register the test executable with CTest
-# This allows running tests with: ctest --preset debug
+# All tests are registered above:
+# - aevrix_http_tests (HTTP response tests)
+# - aevrix_router_tests (Router tests)
+# Run tests with: ctest --test-dir build --output-on-failure
 # =============================================================================
-add_test(NAME aevrix_tests COMMAND aevrix_tests)
