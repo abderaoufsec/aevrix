@@ -160,12 +160,17 @@ bool EventLoop::modify_fd(int fd, uint32_t events) {
 
 bool EventLoop::remove_fd(int fd) {
 #ifdef AEVRIX_USE_EPOLL
+    // First remove from epoll to prevent further events
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
-        aevrix::g_logger.error("Failed to remove fd from epoll: " + std::string(strerror(errno)));
-        return false;
+        // EBADF means fd is already closed or invalid, which is fine
+        if (errno != EBADF) {
+            aevrix::g_logger.error("Failed to remove fd from epoll: " + std::string(strerror(errno)));
+        }
     }
     
-    // Remove callback
+    // Then remove the callback (after epoll removal to prevent new events)
+    // Note: If remove_fd is called from within a callback, this is safe because
+    // we make a copy of the callback before invoking it in the event loop
     fd_callbacks_.erase(fd);
     
     aevrix::g_logger.debug("Removed fd " + std::to_string(fd) + " from epoll");
@@ -236,30 +241,41 @@ bool EventLoop::run(int timeout_ms) {
             // Find callback for this fd
             auto it = fd_callbacks_.find(fd);
             if (it == fd_callbacks_.end()) {
-                aevrix::g_logger.warn("No callback registered for fd " + std::to_string(fd));
+                aevrix::g_logger.warn("No callback registered for fd " + std::to_string(fd) + ", skipping event");
                 continue;
             }
+            
+            // Check if callback is still valid (not null)
+            if (!it->second) {
+                aevrix::g_logger.warn("Callback is null for fd " + std::to_string(fd) + ", skipping event");
+                fd_callbacks_.erase(it);
+                continue;
+            }
+            
+            // Make a copy of the callback to prevent use-after-free if the callback
+            // calls remove_fd() and erases itself from the map during execution
+            EventCallback callback_copy = it->second;
             
             // Determine event type and invoke callback
             if (revents & EPOLLIN) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " is readable");
-                it->second(fd, EventType::Readable);
+                callback_copy(fd, EventType::Readable);
             }
             if (revents & EPOLLOUT) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " is writable");
-                it->second(fd, EventType::Writable);
+                callback_copy(fd, EventType::Writable);
             }
             if (revents & EPOLLERR) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " has error");
-                it->second(fd, EventType::Error);
+                callback_copy(fd, EventType::Error);
             }
             if (revents & EPOLLHUP) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " hangup");
-                it->second(fd, EventType::Hangup);
+                callback_copy(fd, EventType::Hangup);
             }
             if (revents & EPOLLRDHUP) {
                 aevrix::g_logger.debug("fd " + std::to_string(fd) + " peer closed write end");
-                it->second(fd, EventType::Hangup);
+                callback_copy(fd, EventType::Hangup);
             }
         }
         

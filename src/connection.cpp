@@ -184,10 +184,19 @@ Connection::IoResult Connection::write_nonblocking() {
         return IoResult::Success;
     }
 
+    // Write from current offset
+    size_t remaining = output_buffer_.size() - write_offset_;
+    if (remaining == 0) {
+        // Already written everything
+        output_buffer_.clear();
+        write_offset_ = 0;
+        return IoResult::Success;
+    }
+
 #ifdef _WIN32
     SOCKET sock = static_cast<SOCKET>(fd_);
-    int sent = send(sock, output_buffer_.data(), 
-                    static_cast<int>(output_buffer_.size()), 0);
+    int sent = send(sock, output_buffer_.data() + write_offset_, 
+                    static_cast<int>(remaining), 0);
 
     if (sent == SOCKET_ERROR) {
         int error = WSAGetLastError();
@@ -213,7 +222,7 @@ Connection::IoResult Connection::write_nonblocking() {
         return IoResult::Error;
     }
 #else
-    ssize_t sent = send(fd_, output_buffer_.data(), output_buffer_.size(), 0);
+    ssize_t sent = send(fd_, output_buffer_.data() + write_offset_, remaining, 0);
 
     if (sent < 0) {
         int error = errno;
@@ -240,21 +249,19 @@ Connection::IoResult Connection::write_nonblocking() {
     }
 #endif
 
-    // Remove sent data from output buffer
+    // Update write offset (Stage 4 - more efficient than shifting)
     size_t sent_size = static_cast<size_t>(sent);
-    if (sent_size < output_buffer_.size()) {
-        // Partial write - shift remaining data to front
-        std::memmove(output_buffer_.data(), output_buffer_.data() + sent_size, 
-                     output_buffer_.size() - sent_size);
-        output_buffer_.resize(output_buffer_.size() - sent_size);
-    } else {
-        // Full write - clear buffer
+    write_offset_ += sent_size;
+    
+    if (write_offset_ >= output_buffer_.size()) {
+        // Full write - clear buffer and reset offset
         output_buffer_.clear();
+        write_offset_ = 0;
     }
     
     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
                                          "write_nonblocking: sent " + std::to_string(sent) + " bytes, " + 
-                                         std::to_string(output_buffer_.size()) + " bytes remaining");
+                                         std::to_string(output_buffer_.size() - write_offset_) + " bytes remaining");
     
     // Update activity timestamp
     update_activity();

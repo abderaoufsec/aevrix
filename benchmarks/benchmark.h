@@ -161,7 +161,7 @@ public:
         result.iterations = iterations;
         
         std::vector<double> times_us;
-        times_us.reserve(iterations);
+        times_us.reserve(static_cast<std::size_t>(iterations));
         
         // Warmup runs (not measured)
         for (int64_t i = 0; i < warmup_iterations; ++i) {

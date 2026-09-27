@@ -182,6 +182,7 @@ add_executable(aevrix
     src/static_file_server.cpp
     src/event_loop.cpp
     src/connection.cpp
+    src/connection_manager.cpp
     src/server_config.cpp
     src/router.cpp
     src/config_parser.cpp
@@ -253,6 +254,29 @@ add_executable(aevrix_connection_nonblocking_tests
 # Ensure connection nonblocking tests can find aevrix headers
 target_include_directories(aevrix_connection_nonblocking_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
+# Connection manager tests (Stage 2 - Event-Driven Refactor)
+add_executable(aevrix_connection_manager_tests
+    tests/connection_manager_tests.cpp
+    src/connection_manager.cpp
+    src/connection.cpp
+    src/server_config.cpp
+    src/config_parser.cpp
+    src/logger.cpp
+)
+
+# Ensure connection manager tests can find aevrix headers
+target_include_directories(aevrix_connection_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Output state machine tests (Stage 4 - Response/Output State Machine)
+add_executable(aevrix_output_state_machine_tests
+    tests/output_state_machine_tests.cpp
+    src/connection.cpp
+    src/logger.cpp
+)
+
+# Ensure output state machine tests can find aevrix headers
+target_include_directories(aevrix_output_state_machine_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
 # Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
 # add_executable(aevrix_path_security_tests
 #     tests/path_security_tests.cpp
@@ -275,6 +299,10 @@ if(WIN32)
     target_link_libraries(aevrix_http_cache_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_metrics_tests PRIVATE ws2_32 Threads::Threads)
     target_link_libraries(aevrix_connection_nonblocking_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_connection_manager_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_output_state_machine_tests PRIVATE ws2_32)
+    # aevrix_http_incremental_parser_tests doesn't need ws2_32 (uses simulated buffers)
+    # target_link_libraries(aevrix_http_incremental_parser_tests PRIVATE ws2_32)
     # target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
 endif()
 
@@ -292,6 +320,12 @@ add_test(NAME aevrix_metrics_tests COMMAND aevrix_metrics_tests)
 
 # Register connection nonblocking tests (Stage 1 - Event-Driven Refactor)
 add_test(NAME aevrix_connection_nonblocking_tests COMMAND aevrix_connection_nonblocking_tests)
+
+# Register connection manager tests (Stage 2 - Event-Driven Refactor)
+add_test(NAME aevrix_connection_manager_tests COMMAND aevrix_connection_manager_tests)
+
+# Register output state machine tests (Stage 4 - Response/Output State Machine)
+add_test(NAME aevrix_output_state_machine_tests COMMAND aevrix_output_state_machine_tests)
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)

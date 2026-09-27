@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <iostream>
+#include <cstddef>  // For std::size_t
 
 namespace aevrix {
 
@@ -262,9 +263,14 @@ std::string StaticFileServer::read_file(const std::filesystem::path& file_path) 
         // Read file content
         std::string content;
         file.seekg(0, std::ios::end);
-        content.resize(file.tellg());
+        auto file_size = file.tellg();
+        if (file_size < 0) {
+            std::cerr << "Failed to get file size: " << file_path.string() << "\n";
+            return "";
+        }
+        content.resize(static_cast<std::size_t>(file_size));
         file.seekg(0, std::ios::beg);
-        file.read(&content[0], content.size());
+        file.read(&content[0], static_cast<std::streamsize>(content.size()));
         
         if (!file) {
             std::cerr << "Failed to read file: " << file_path.string() << "\n";

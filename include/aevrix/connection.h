@@ -39,6 +39,11 @@
 #include <memory>
 #include <chrono>
 #include <cstdint>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 #include "aevrix/http_request_parser.h"
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
@@ -140,8 +145,20 @@ public:
 
     /**
      * @brief Destructor
+     * 
+     * Closes the file descriptor if it's still open.
      */
-    ~Connection() = default;
+    ~Connection() {
+#ifdef _WIN32
+        if (fd_ != -1) {
+            closesocket(static_cast<SOCKET>(fd_));
+        }
+#else
+        if (fd_ != -1) {
+            ::close(fd_);
+        }
+#endif
+    }
 
     // Delete copy operations (connections are unique)
     Connection(const Connection&) = delete;
@@ -227,7 +244,20 @@ public:
     /**
      * @brief Clear the output buffer
      */
-    void clear_output_buffer() { output_buffer_.clear(); }
+
+    /**
+     * @brief Set the input buffer (for testing)
+     */
+    void set_input_buffer(const std::string& data) {
+        input_buffer_.assign(data.begin(), data.end());
+    }
+
+    /**
+     * @brief Append to the input buffer (for testing)
+     */
+    void append_input_buffer(const std::string& data) {
+        input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());
+    }
 
     // =========================================================================
     // Parser State
@@ -252,6 +282,100 @@ public:
      * @brief Check if the parser encountered an error
      */
     bool has_parse_error() const { return parser_.has_error(); }
+
+    /**
+     * @brief Get the parser error message
+     */
+    std::string parse_error_message() const { return parser_.error_message(); }
+
+    /**
+     * @brief Reset the parser for a new request
+     */
+    void reset_parser() { parser_ = HttpRequestParser(); }
+
+    // =========================================================================
+    // Parser State Management (Stage 3 - HTTP Incremental State Machine)
+    // =========================================================================
+
+    /**
+     * @brief Feed data to the parser from the input buffer
+     * 
+     * This method feeds the accumulated input buffer data to the HTTP parser
+     * and clears the input buffer after feeding. The parser state is preserved
+     * between calls, allowing incremental parsing of partial requests.
+     * 
+     * @return true if feeding succeeded, false on parser error
+     */
+    bool feed_parser() {
+        if (input_buffer_.empty()) {
+            return true;  // Nothing to feed
+        }
+        
+        parser_.feed(input_buffer_.data(), input_buffer_.size());
+        input_buffer_.clear();
+        
+        return !parser_.has_error();
+    }
+
+    /**
+     * @brief Check if there is unconsumed data in the input buffer
+     * 
+     * This can happen when multiple requests are pipelined in the buffer.
+     * 
+     * @return true if there is unconsumed data, false otherwise
+     */
+    bool has_unconsumed_data() const { return !input_buffer_.empty(); }
+
+    // =========================================================================
+    // Output State Management (Stage 4 - Response/Output State Machine)
+    // =========================================================================
+
+    /**
+     * @brief Check if there is pending output data to write
+     */
+    bool has_pending_output() const { return !output_buffer_.empty(); }
+
+    /**
+     * @brief Get the current write offset
+     */
+    size_t write_offset() const { return write_offset_; }
+
+    /**
+     * @brief Set the write offset
+     */
+    void set_write_offset(size_t offset) { write_offset_ = offset; }
+
+    /**
+     * @brief Check if output is complete (buffer empty and offset at end)
+     */
+    bool is_output_complete() const { return output_buffer_.empty() && write_offset_ == 0; }
+
+    /**
+     * @brief Set the output buffer for response (Stage 4)
+     * 
+     * This replaces the current output buffer with the serialized response.
+     * 
+     * @param data The response data to send
+     */
+    void set_output_buffer(const std::string& data) {
+        output_buffer_.assign(data.begin(), data.end());
+        write_offset_ = 0;
+    }
+
+    /**
+     * @brief Append to the output buffer (for chunked responses)
+     */
+    void append_output_buffer(const std::string& data) {
+        output_buffer_.insert(output_buffer_.end(), data.begin(), data.end());
+    }
+
+    /**
+     * @brief Clear the output buffer
+     */
+    void clear_output_buffer() {
+        output_buffer_.clear();
+        write_offset_ = 0;
+    }
 
     // =========================================================================
     // Response Management
@@ -482,6 +606,7 @@ private:
 
     std::vector<char> input_buffer_;   // Received data waiting to be parsed
     std::vector<char> output_buffer_;  // Data waiting to be sent
+    size_t write_offset_ = 0;        // Current write offset in output buffer (Stage 4)
 
     // =========================================================================
     // HTTP State

@@ -77,24 +77,24 @@ void ServerConfig::load_from_parser(const ConfigParser& parser) {
     host_ = parser.get_string("host", host_);
     
     // Load port
-    port_ = static_cast<uint16_t>(parser.get_int("port", port_));
+    port_ = static_cast<uint16_t>(parser.get_int("port", static_cast<int64_t>(port_)));
     
     // Load workers
-    workers_ = static_cast<uint32_t>(parser.get_int("workers", workers_));
+    workers_ = static_cast<uint32_t>(parser.get_int("workers", static_cast<int64_t>(workers_)));
     
     // Load document root
     document_root_ = parser.get_string("document_root", document_root_);
     
     // Load timeouts
-    header_timeout_ms_ = static_cast<uint64_t>(parser.get_int("header_timeout_ms", header_timeout_ms_));
-    body_timeout_ms_ = static_cast<uint64_t>(parser.get_int("body_timeout_ms", body_timeout_ms_));
-    keep_alive_timeout_ms_ = static_cast<uint64_t>(parser.get_int("keep_alive_timeout_ms", keep_alive_timeout_ms_));
-    write_timeout_ms_ = static_cast<uint64_t>(parser.get_int("write_timeout_ms", write_timeout_ms_));
+    header_timeout_ms_ = static_cast<uint64_t>(parser.get_int("header_timeout_ms", static_cast<int64_t>(header_timeout_ms_)));
+    body_timeout_ms_ = static_cast<uint64_t>(parser.get_int("body_timeout_ms", static_cast<int64_t>(body_timeout_ms_)));
+    keep_alive_timeout_ms_ = static_cast<uint64_t>(parser.get_int("keep_alive_timeout_ms", static_cast<int64_t>(keep_alive_timeout_ms_)));
+    write_timeout_ms_ = static_cast<uint64_t>(parser.get_int("write_timeout_ms", static_cast<int64_t>(write_timeout_ms_)));
     
     // Load resource limits
-    max_connections_ = static_cast<uint32_t>(parser.get_int("max_connections", max_connections_));
-    max_buffer_size_ = static_cast<uint32_t>(parser.get_int("max_buffer_size", max_buffer_size_));
-    max_request_body_ = static_cast<uint32_t>(parser.get_int("max_request_body", max_request_body_));
+    max_connections_ = static_cast<uint32_t>(parser.get_int("max_connections", static_cast<int64_t>(max_connections_)));
+    max_buffer_size_ = static_cast<uint32_t>(parser.get_int("max_buffer_size", static_cast<int64_t>(max_buffer_size_)));
+    max_request_body_ = static_cast<uint32_t>(parser.get_int("max_request_body", static_cast<int64_t>(max_request_body_)));
     
     // Validate configuration
     if (port_ == 0) {

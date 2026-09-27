@@ -98,7 +98,7 @@ void test_latency_metrics() {
     
     // Record some latency samples
     for (int i = 0; i < 100; i++) {
-        metrics.record_latency(100 + i);  // 100-199 microseconds
+        metrics.record_latency(static_cast<uint64_t>(100 + i));  // 100-199 microseconds
     }
     
     // Test mean latency

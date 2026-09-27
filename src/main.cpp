@@ -55,6 +55,7 @@
 #include "aevrix/http_request_parser.h"
 #include "aevrix/static_file_server.h"
 #include "aevrix/connection.h"
+#include "aevrix/connection_manager.h"
 #include "aevrix/server_config.h"
 #include "aevrix/worker_pool.h"
 #include "aevrix/router.h"
@@ -338,7 +339,7 @@ bool wants_keep_alive(const HttpRequest& request) {
  * @param file_server The static file server instance
  * @return HttpResponse The structured HTTP response
  */
-aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server, aevrix::Router& router) {
+aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFileServer& file_server, [[maybe_unused]] aevrix::Router& router) {
     // First, try to route the request through the router
     // The router consumes Request and produces Response (no socket knowledge)
     try {
@@ -411,6 +412,296 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
 }
 
 /**
+ * @brief Generate response for a request (Stage 4 - Response/Output State Machine)
+ * 
+ * This function generates an HTTP response for the given request.
+ * It handles routing, static file serving, and error responses.
+ * 
+ * @param request The parsed HTTP request
+ * @param file_server The static file server instance
+ * @param router The router for application-level routing
+ * @return The generated HTTP response
+ */
+aevrix::http::HttpResponse generate_response(const aevrix::http::HttpRequest& request,
+                                               aevrix::StaticFileServer& file_server,
+                                               [[maybe_unused]] aevrix::Router& router) {
+    // Try router first
+    try {
+    } catch (const std::exception& e) {
+        // Router returned an error, fall back to static file serving
+        aevrix::g_logger.warn("Router error: " + std::string(e.what()) + ", falling back to static file serving");
+    }
+    
+    // No route found or router error, fall back to static file serving
+    // Check if client wants keep-alive
+    bool keep_alive = wants_keep_alive(request);
+    
+    // Check the method first
+    if (request.method() == aevrix::http::HttpMethod::GET || request.method() == aevrix::http::HttpMethod::HEAD) {
+        // Serve the file using StaticFileServer
+        auto [content, mime_type, status_code] = file_server.serve_file(request.target());
+        
+        if (status_code == 200) {
+            // File found and read successfully
+            if (request.method() == aevrix::http::HttpMethod::GET) {
+                aevrix::http::HttpResponse response(aevrix::http::StatusCode::OK, content);
+                response.set_header("Content-Type", mime_type);
+                response.set_header("Server", "Aevrix/0.1.0");
+                response.set_connection_policy(keep_alive ? aevrix::http::ConnectionPolicy::KeepAlive : aevrix::http::ConnectionPolicy::Close);
+                return response;
+            } else {
+                // HEAD request - return 200 OK with no body
+                aevrix::http::HttpResponse response(aevrix::http::StatusCode::OK);
+                response.set_header("Content-Type", mime_type);
+                response.set_header("Content-Length", std::to_string(content.length()));
+                response.set_header("Server", "Aevrix/0.1.0");
+                response.set_connection_policy(keep_alive ? aevrix::http::ConnectionPolicy::KeepAlive : aevrix::http::ConnectionPolicy::Close);
+                return response;
+            }
+        } else if (status_code == 404) {
+            // File not found
+            aevrix::http::HttpResponse response(aevrix::http::StatusCode::NotFound, "Not Found");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
+            return response;
+        } else if (status_code == 403) {
+            // Forbidden (directory access or path traversal attempt)
+            aevrix::http::HttpResponse response(aevrix::http::StatusCode::Forbidden, "Forbidden");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
+            return response;
+        } else {
+            // Internal server error
+            aevrix::http::HttpResponse response(aevrix::http::StatusCode::InternalServerError, "Internal Server Error");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
+            return response;
+        }
+    } else {
+        // Return 405 Method Not Allowed for unsupported methods
+        aevrix::http::HttpResponse response(aevrix::http::StatusCode::MethodNotAllowed, 
+                               "Method not allowed: " + aevrix::http::http_method_to_string(request.method()));
+        response.set_header("Content-Type", "text/plain");
+        response.set_header("Server", "Aevrix/0.1.0");
+        response.set_header("Allow", "GET, HEAD");  // Indicate allowed methods
+        response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
+        return response;
+    }
+}
+
+/**
+ * @brief Handle incremental write event for a connection (Stage 4 - Response/Output State Machine)
+ * 
+ * This function is called from the event loop when EPOLLOUT is set for a connection.
+ * It performs nonblocking writes, handling partial writes and EAGAIN/EWOULDBLOCK.
+ * 
+ * The incremental write flow:
+ * 1. Write available data (nonblocking, handles EAGAIN)
+ * 2. Update write offset
+ * 3. Check if output is complete
+ * 4. If complete and keep-alive: disable EPOLLOUT, prepare for next request
+ * 5. If complete and close: remove connection
+ * 6. If EAGAIN: wait for next EPOLLOUT
+ * 
+ * @param conn The connection object
+ * @param event_loop The event loop for modifying interest events
+ * @return true if connection should remain open, false if it should close
+ */
+#ifdef __linux__
+bool handle_write_event(std::shared_ptr<aevrix::Connection> conn, 
+                        aevrix::EventLoop& event_loop) {
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                         "handle_write_event called");
+    
+    // Perform nonblocking write
+    auto write_result = conn->write_nonblocking();
+    
+    if (write_result == aevrix::Connection::IoResult::InProgress) {
+        // Send buffer full, wait for next EPOLLOUT
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                             "Send buffer full, waiting for EPOLLOUT");
+        return true;  // Keep connection alive, wait for EPOLLOUT
+    }
+    
+    if (write_result == aevrix::Connection::IoResult::Error) {
+        // Socket error
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+                                             "Socket error during write");
+        return false;  // Close connection
+    }
+    
+    // Check if output is complete
+    if (conn->is_output_complete()) {
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                             "Output complete");
+        
+        // Output complete - check keep-alive
+        if (conn->keep_alive()) {
+            // Keep connection alive for next request
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                                 "Keep-alive: preparing for next request");
+            
+            // Disable EPOLLOUT (no more output to write)
+            event_loop.modify_fd(conn->fd(), EPOLLIN);
+            
+            // Reset output buffer for next response
+            conn->clear_output_buffer();
+            
+            // Reset parser for next request
+            conn->reset_parser();
+            
+            return true;  // Keep connection alive
+        } else {
+            // Close connection
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(), 
+                                                 "Connection close requested");
+            return false;  // Close connection
+        }
+    }
+    
+    // Output not yet complete, wait for more EPOLLOUT
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
+                                         "Output incomplete, waiting for EPOLLOUT");
+    return true;  // Keep connection alive, wait for EPOLLOUT
+}
+#endif
+
+/**
+ * @brief Handle incremental read event for a connection (Stage 3/4 - HTTP Incremental State Machine)
+ * 
+ * This function is called from the event loop when EPOLLIN is set for a connection.
+ * It performs nonblocking reads, feeds data to the parser incrementally, and handles
+ * parser state transitions. When a request is complete, it generates a response
+ * and sets up the output state machine (Stage 4).
+ * 
+ * The incremental read flow:
+ * 1. Read available data (nonblocking, handles EAGAIN)
+ * 2. Append to connection's input buffer
+ * 3. Feed input buffer to parser
+ * 4. Clear input buffer after feeding
+ * 5. Check parser state:
+ *    - Incomplete → wait for more EPOLLIN data
+ *    - Complete → generate response (Stage 4)
+ *    - Error → send error response and close
+ *    - Oversized → send 413 error and close
+ * 
+ * @param conn The connection object
+ * @param file_server The static file server instance
+ * @param router The router for application-level routing
+ * @param event_loop The event loop for modifying interest events
+ * @return true if connection should remain open, false if it should close
+ */
+#ifdef __linux__
+bool handle_read_event(std::shared_ptr<aevrix::Connection> conn, 
+                       aevrix::StaticFileServer& file_server, 
+                       aevrix::Router& router,
+                       aevrix::EventLoop& event_loop) {
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                         "handle_read_event called");
+    
+    // Perform nonblocking read
+    auto read_result = conn->read_nonblocking();
+    
+    if (read_result == aevrix::Connection::IoResult::InProgress) {
+        // No data available right now, wait for next EPOLLIN
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+                                             "No data available, waiting for EPOLLIN");
+        return true;  // Keep connection alive, wait for more data
+    }
+    
+    if (read_result == aevrix::Connection::IoResult::Closed) {
+        // Peer disconnected
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(), 
+                                             "Peer disconnected");
+        return false;  // Close connection
+    }
+    
+    if (read_result == aevrix::Connection::IoResult::Error) {
+        // Socket error
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+                                             "Socket error during read");
+        return false;  // Close connection
+    }
+    
+    // Data received successfully - feed to parser
+    if (!conn->feed_parser()) {
+        // Parser error occurred
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+                                             "Parser error: " + conn->parse_error_message());
+        
+        // For Stage 3, we close the connection on parser error
+        // In Stage 4, this will be integrated with the output state machine
+        return false;
+    }
+    
+    // Check parser state
+    if (conn->has_parse_error()) {
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+                                             "Parser has error: " + conn->parse_error_message());
+        return false;  // Close connection on error
+    }
+    
+    if (conn->is_request_complete()) {
+        aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, conn->id(), conn->request_id(),
+                                         "Request complete, generating response");
+        
+        // Extract the parsed request
+        aevrix::http::HttpRequest request = conn->parser().request();
+        
+        // Evaluate keep-alive
+        conn->evaluate_keep_alive(request);
+        
+        // Increment request ID
+        conn->increment_request_id();
+        
+        // Generate response (Stage 4)
+        aevrix::http::HttpResponse response = generate_response(request, file_server, router);
+        
+        // Serialize response
+        aevrix::http::HttpResponseSerializer serializer;
+        std::string response_data = serializer.serialize(response);
+        
+        // Set output buffer
+        conn->set_output_buffer(response_data);
+        
+        // Enable EPOLLOUT for writing response
+        event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+        
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
+                                             "Response generated, EPOLLOUT enabled");
+        
+        // Check if there's unconsumed data (pipelined requests)
+        if (conn->has_unconsumed_data()) {
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
+                                                 "Unconsumed data in buffer (pipelined request)");
+            // Feed the unconsumed data to a fresh parser
+            conn->reset_parser();
+            if (!conn->feed_parser()) {
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
+                                                     "Parser error on pipelined request");
+                return false;
+            }
+        } else {
+            // No unconsumed data, reset parser for next request
+            conn->reset_parser();
+        }
+        
+        // For Stage 4, we complete the read side and enable output
+        // The response will be written in the EPOLLOUT handler
+        return true;
+    }
+    
+    // Request not yet complete, wait for more data
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
+                                         "Request incomplete, waiting for more data");
+    return true;  // Keep connection alive, wait for more EPOLLIN
+}
+#endif
+
+/**
  * @brief Handle a single client connection with keep-alive support
  * 
  * Accepts a connection, reads the HTTP request (with partial read handling),
@@ -453,7 +744,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * @param file_server The static file server instance
  * @param config Server configuration with timeout values
  */
-void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config, aevrix::WorkerPool& worker_pool, aevrix::Router& router) {
+void handle_connection(int client_fd, aevrix::StaticFileServer& file_server, const aevrix::ServerConfig& config, aevrix::WorkerPool& worker_pool, [[maybe_unused]] aevrix::Router& router) {
     (void)config;  // TODO: Add timeout checks in future iterations
     (void)worker_pool;  // TODO: Use worker pool for blocking filesystem operations
     // Create Connection object to manage state
@@ -773,16 +1064,62 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             
+            // Create ConnectionManager (Stage 2)
+            aevrix::ConnectionManager connection_manager(&config);
+            
             // Add listener socket to event loop
             if (!event_loop.add_fd(listener.get_socket(), EPOLLIN, 
-                [&, file_server = std::ref(file_server)](int fd, aevrix::EventType event) {
+                [&listener, &connection_manager, &file_server, &router, &event_loop, &connection_count]([[maybe_unused]] int fd, aevrix::EventType event) {
                     if (event == aevrix::EventType::Readable) {
                         // Accept new connection
                         auto client_fd = listener.accept();
                         if (client_fd.has_value()) {
-                            handle_connection(client_fd.value(), file_server, config, worker_pool, router);
-                            connection_count++;
-                            aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
+                            // Register connection with ConnectionManager
+                            auto conn = connection_manager.register_connection(client_fd.value());
+                            if (conn) {
+                                // Add connection to event loop for EPOLLIN
+                                int client_fd_value = client_fd.value();
+                                event_loop.add_fd(client_fd_value, EPOLLIN, 
+                                    [client_fd_value, &connection_manager, &file_server, &router, &event_loop]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                        if (client_event == aevrix::EventType::Readable) {
+                                            auto conn_ptr = connection_manager.get_connection(client_fd_value);
+                                            if (conn_ptr) {
+                                                bool keep_alive = handle_read_event(conn_ptr, file_server, router, event_loop);
+                                                if (!keep_alive) {
+                                                    // Remove from event loop first (prevents further events)
+                                                    event_loop.remove_fd(client_fd_value);
+                                                    // Then remove from connection manager (may destroy connection)
+                                                    connection_manager.remove_connection(client_fd_value);
+                                                }
+                                            } else {
+                                                // Connection already removed, clean up event loop
+                                                event_loop.remove_fd(client_fd_value);
+                                            }
+                                        } else if (client_event == aevrix::EventType::Writable) {
+                                            // Stage 4: Handle EPOLLOUT event
+                                            auto conn_ptr = connection_manager.get_connection(client_fd_value);
+                                            if (conn_ptr) {
+                                                bool keep_alive = handle_write_event(conn_ptr, event_loop);
+                                                if (!keep_alive) {
+                                                    event_loop.remove_fd(client_fd_value);
+                                                    connection_manager.remove_connection(client_fd_value);
+                                                }
+                                            } else {
+                                                event_loop.remove_fd(client_fd_value);
+                                            }
+                                        } else if (client_event == aevrix::EventType::Error || client_event == aevrix::EventType::Hangup) {
+                                            // Remove from event loop first (prevents further events)
+                                            event_loop.remove_fd(client_fd_value);
+                                            // Then remove from connection manager (may destroy connection)
+                                            connection_manager.remove_connection(client_fd_value);
+                                        }
+                                    });
+                                
+                                connection_count++;
+                                aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
+                            } else {
+                                aevrix::g_logger.warn("Connection rejected (at capacity)");
+                            }
                         }
                     }
                 })) {
@@ -861,3 +1198,5 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 }
+
+
