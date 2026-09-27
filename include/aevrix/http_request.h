@@ -26,11 +26,18 @@
 // - Header integration with HttpHeaders class
 // - Body content handling
 // - Request validation
+// - Conditional request headers (If-None-Match, If-Modified-Since)
+// - Range request support
 //
 // Phase 4 Implementation:
 // - Basic request structure with method, target, version, headers, and body
 // - Request validation
 // - Integration with HTTP parser
+//
+// Phase 19 Implementation:
+// - If-None-Match header for ETag-based conditional requests
+// - If-Modified-Since header for date-based conditional requests
+// - Range header for partial content requests
 // =============================================================================
 
 #pragma once
@@ -257,6 +264,50 @@ public:
         return method_ == HttpMethod::POST || 
                method_ == HttpMethod::PUT || 
                method_ == HttpMethod::HTTP_PATCH;
+    }
+
+    // =========================================================================
+    // Cache Control (Phase 19)
+    // =========================================================================
+
+    /**
+     * @brief Get the If-None-Match header value
+     * 
+     * If-None-Match is used for conditional requests with ETag validation.
+     * The client sends the ETag of the cached resource, and the server responds
+     * with 304 Not Modified if the resource hasn't changed.
+     * Format: "33a64df551425fcc55e4d42a148795d9f25f89d4" or multiple ETags
+     * 
+     * @return std::string The If-None-Match value, or empty if not present
+     */
+    std::string get_if_none_match() const {
+        return headers_.get("If-None-Match");
+    }
+
+    /**
+     * @brief Get the If-Modified-Since header value
+     * 
+     * If-Modified-Since is used for conditional requests with Last-Modified validation.
+     * The client sends the date when the resource was last cached, and the server
+     * responds with 304 Not Modified if the resource hasn't been modified since then.
+     * Format: "Wed, 21 Oct 2015 07:28:00 GMT" (RFC 7231)
+     * 
+     * @return std::string The If-Modified-Since value, or empty if not present
+     */
+    std::string get_if_modified_since() const {
+        return headers_.get("If-Modified-Since");
+    }
+
+    /**
+     * @brief Get the Range header value
+     * 
+     * Range is used for partial content requests (206 Partial Content).
+     * Format: "bytes=0-1023" or "bytes=0-1023,2048-3071" for multiple ranges
+     * 
+     * @return std::string The Range header value, or empty if not present
+     */
+    std::string get_range() const {
+        return headers_.get("Range");
     }
 
     // =========================================================================

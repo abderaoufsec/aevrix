@@ -15,6 +15,10 @@
 // We'll implement the most common status codes needed for basic HTTP server:
 // - 200 OK, 400 Bad Request, 404 Not Found, 405 Method Not Allowed, 500 Internal Server Error
 //
+// Phase 19 Implementation:
+// - 206 Partial Content for range requests
+// - 304 Not Modified for conditional requests
+//
 // Reference: RFC 9110 - https://httpwg.org/specs/rfc9110.html
 // =============================================================================
 
@@ -52,6 +56,13 @@ enum class StatusCode : uint16_t {
      * Commonly used after PUT/POST requests.
      */
     Created = 201,
+
+    /**
+     * 206 Partial Content
+     * The server is successfully delivering a part of the requested resource.
+     * Used in response to Range requests (RFC 7233).
+     */
+    PartialContent = 206,
 
     /**
      * 204 No Content

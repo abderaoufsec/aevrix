@@ -25,12 +25,18 @@
 // - Connection policy management (keep-alive vs close)
 // - Content length calculation
 // - Integration with HttpHeader and StatusCode classes
+// - Cache control headers (ETag, Last-Modified) for conditional requests
 //
 // Phase 3 Implementation:
 // - Basic response structure with status, headers, and body
 // - Connection policy support
 // - Content length calculation
 // - Integration with response serializer
+//
+// Phase 19 Implementation:
+// - ETag support for cache validation
+// - Last-Modified support for cache validation
+// - Conditional request support (304 Not Modified)
 // =============================================================================
 
 #pragma once
@@ -260,6 +266,46 @@ public:
     }
 
     // =========================================================================
+    // Cache Control (Phase 19)
+    // =========================================================================
+
+    /**
+     * @brief Set the ETag header for cache validation
+     * 
+     * ETag (Entity Tag) is a unique identifier for a specific version of a resource.
+     * Used for conditional requests to avoid transferring unchanged data.
+     * Format: "33a64df551425fcc55e4d42a148795d9f25f89d4" (weak: W/"33a64df551425fcc55e4d42a148795d9f25f89d4")
+     * 
+     * @param etag The ETag value (without quotes)
+     */
+    void set_etag(const std::string& etag);
+
+    /**
+     * @brief Get the ETag header value
+     * 
+     * @return std::string The ETag value, or empty if not set
+     */
+    std::string get_etag() const;
+
+    /**
+     * @brief Set the Last-Modified header
+     * 
+     * Last-Modified indicates the date and time when the resource was last modified.
+     * Used for conditional requests to avoid transferring unchanged data.
+     * Format: "Wed, 21 Oct 2015 07:28:00 GMT" (RFC 7231)
+     * 
+     * @param last_modified The Last-Modified date in HTTP format
+     */
+    void set_last_modified(const std::string& last_modified);
+
+    /**
+     * @brief Get the Last-Modified header value
+     * 
+     * @return std::string The Last-Modified value, or empty if not set
+     */
+    std::string get_last_modified() const;
+
+    // =========================================================================
     // Utility Methods
     // =========================================================================
 
@@ -381,6 +427,37 @@ inline void HttpResponse::update_content_length() {
         // Remove Content-Length header if there's no body
         headers_.remove("Content-Length");
     }
+}
+
+inline void HttpResponse::set_etag(const std::string& etag) {
+    // ETag should be quoted according to RFC 7232
+    // Format: "etag-value" or W/"etag-value" for weak validators
+    if (etag.empty()) {
+        headers_.remove("ETag");
+    } else {
+        headers_.set("ETag", "\"" + etag + "\"");
+    }
+}
+
+inline std::string HttpResponse::get_etag() const {
+    std::string etag = headers_.get("ETag");
+    // Remove quotes if present
+    if (!etag.empty() && etag.front() == '"' && etag.back() == '"') {
+        return etag.substr(1, etag.length() - 2);
+    }
+    return etag;
+}
+
+inline void HttpResponse::set_last_modified(const std::string& last_modified) {
+    if (last_modified.empty()) {
+        headers_.remove("Last-Modified");
+    } else {
+        headers_.set("Last-Modified", last_modified);
+    }
+}
+
+inline std::string HttpResponse::get_last_modified() const {
+    return headers_.get("Last-Modified");
 }
 
 inline bool HttpResponse::is_valid() const {

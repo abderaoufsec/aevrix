@@ -161,6 +161,11 @@ enable_testing()
 # - Graceful shutdown
 # - Uses signal_handler.h
 # - src/signal_handler.cpp
+#
+# Phase 19 adds:
+# - HTTP cache control utilities
+# - Uses http_cache.h
+# - src/http_cache.cpp
 # =============================================================================
 add_executable(aevrix
     src/main.cpp
@@ -174,6 +179,7 @@ add_executable(aevrix
     src/config_parser.cpp
     src/logger.cpp
     src/signal_handler.cpp
+    src/http_cache.cpp
 )
 
 # Threading support for worker pool
@@ -215,6 +221,12 @@ add_executable(aevrix_http_request_tests
     src/http_request_parser.cpp
 )
 
+# HTTP Cache tests (enabled in Phase 19)
+add_executable(aevrix_http_cache_tests
+    tests/http_cache_tests.cpp
+    src/http_cache.cpp
+)
+
 # Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
 # add_executable(aevrix_path_security_tests
 #     tests/path_security_tests.cpp
@@ -225,6 +237,7 @@ add_executable(aevrix_http_request_tests
 target_include_directories(aevrix_router_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_request_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_http_cache_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 # target_include_directories(aevrix_path_security_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Link Windows socket library on Windows (for test file operations)
@@ -240,6 +253,9 @@ add_test(NAME aevrix_http_tests COMMAND aevrix_http_tests)
 
 # Register HTTP request tests (enabled in Phase 16)
 add_test(NAME aevrix_http_request_tests COMMAND aevrix_http_request_tests)
+
+# Register HTTP cache tests (enabled in Phase 19)
+add_test(NAME aevrix_http_cache_tests COMMAND aevrix_http_cache_tests)
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
