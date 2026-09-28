@@ -99,12 +99,9 @@ void test_double_encoded_traversal_rejected() {
     aevrix::StaticFileServer server(test_dir.root.string());
 
     // Try to access secret file via double-encoded traversal
-    try {
-        (void)server.is_path_safe("%252e%252e/secret/secret.txt");
-        assert(false);  // Should throw due to double-encoding detection
-    } catch (...) {
-        // Expected: double-encoded paths should be rejected
-    }
+    // Double-encoded paths should be rejected (return false)
+    bool is_safe = server.is_path_safe("%252e%252e/secret/secret.txt");
+    assert(!is_safe);  // Should be rejected
 
     std::cout << "PASSED" << std::endl;
 }

@@ -128,13 +128,19 @@ bool StaticFileServer::is_path_safe(const std::string& request_target, const std
 std::string StaticFileServer::normalize_path(const std::string& path) const {
     // URL decode the path first
     std::string decoded = url_decode(path);
-    
+
+    // Stage 7: Check if URL decoding rejected the path (e.g., double-encoded)
+    if (decoded.empty()) {
+        std::cerr << "Path normalization failed: URL decoding rejected path\n";
+        throw std::runtime_error("Path normalization failed");
+    }
+
     // Remove leading slash if present (filesystem paths don't start with /)
     std::string normalized = decoded;
     if (!normalized.empty() && normalized[0] == '/') {
         normalized = normalized.substr(1);
     }
-    
+
     // If path is empty after removing leading slash, use "index.html"
     if (normalized.empty()) {
         normalized = "index.html";
@@ -188,7 +194,7 @@ std::string StaticFileServer::url_decode(const std::string& encoded) const {
     std::string result = decoded.str();
     if (result.find('%') != std::string::npos) {
         std::cerr << "Path validation failed: double-encoded path detected\n";
-        throw std::runtime_error("Double-encoded path rejected");
+        return "";  // Return empty string to indicate rejection
     }
 
     return result;
