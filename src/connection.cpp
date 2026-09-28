@@ -35,9 +35,11 @@ Connection::Connection(int fd, uint64_t id)
     : fd_(fd)
     , id_(id)
     , created_at_(std::chrono::steady_clock::now())
-    , last_activity_(std::chrono::steady_clock::now()) {
-    
-    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+    , last_activity_(std::chrono::steady_clock::now())
+    , deadline_(std::chrono::steady_clock::time_point::max())
+    , worker_active_(false) {
+
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                         "Connection created (fd=" + std::to_string(fd) + ")");
 }
 
@@ -334,6 +336,56 @@ bool Connection::has_write_timeout(const ServerConfig& config) const {
         return true;
     }
     
+    return false;
+}
+
+// =============================================================================
+// Deadline Management (Stage 6 - Timeout Enforcement)
+// =============================================================================
+
+void Connection::set_deadline(const ServerConfig& config) {
+    // If worker is active, don't set deadline (worker has its own timeout)
+    if (worker_active_) {
+        deadline_ = std::chrono::steady_clock::time_point::max();
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    uint64_t timeout_ms = 0;
+
+    // Determine timeout based on current state
+    if (read_state_ == ReadState::Headers) {
+        timeout_ms = config.header_timeout_ms();
+    } else if (read_state_ == ReadState::Body) {
+        timeout_ms = config.body_timeout_ms();
+    } else if (write_state_ == WriteState::Body || write_state_ == WriteState::Headers) {
+        timeout_ms = config.write_timeout_ms();
+    } else if (state_ == ConnectionState::Waiting) {
+        timeout_ms = config.keep_alive_timeout_ms();
+    } else {
+        // No timeout for other states
+        deadline_ = std::chrono::steady_clock::time_point::max();
+        return;
+    }
+
+    deadline_ = now + std::chrono::milliseconds(timeout_ms);
+}
+
+bool Connection::has_deadline_exceeded() const {
+    // If worker is active, don't timeout
+    if (worker_active_) {
+        return false;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (deadline_ == std::chrono::steady_clock::time_point::max()) {
+        return false;  // No deadline set
+    }
+
+    if (now >= deadline_) {
+        return true;
+    }
+
     return false;
 }
 

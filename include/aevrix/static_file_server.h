@@ -11,6 +11,9 @@
 // - Support for encoded path segments (URL encoding)
 // - MIME type detection based on file extension
 // - Protection against absolute paths and relative navigation
+// - Symlink policy: symlinks allowed only if final resolved target remains inside document root (Stage 7)
+// - Double-encoded path rejection (Stage 7)
+// - Path-component-aware containment check (Stage 7)
 //
 // Current Implementation (Phase 6):
 // - Document root configuration
@@ -19,6 +22,12 @@
 // - File serving with proper HTTP responses
 // - 404 Not Found for non-existent files
 // - 403 Forbidden for directory access attempts
+//
+// Stage 7 Security Enhancements:
+// - Explicit symlink policy: resolve symlinks and validate final target
+// - Double-encoded path detection and rejection
+// - Path-component-aware validation (prevents prefix collision attacks)
+// - Backslash handling (normalized to forward slashes)
 //
 // Future Enhancements:
 // - Range request support (206 Partial Content)

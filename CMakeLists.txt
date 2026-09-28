@@ -279,11 +279,27 @@ add_executable(aevrix_output_state_machine_tests
 # Ensure output state machine tests can find aevrix headers
 target_include_directories(aevrix_output_state_machine_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
-# Path security tests (enabled in Phase 16 - temporarily disabled due to implementation issues)
-# add_executable(aevrix_path_security_tests
-#     tests/path_security_tests.cpp
-#     src/static_file_server.cpp
-# )
+# Timeout enforcement tests (Stage 6 - Timeout Enforcement)
+add_executable(aevrix_timeout_enforcement_tests
+    tests/timeout_enforcement_tests.cpp
+    src/connection.cpp
+    src/server_config.cpp
+    src/config_parser.cpp
+    src/logger.cpp
+)
+
+# Ensure timeout enforcement tests can find aevrix headers
+target_include_directories(aevrix_timeout_enforcement_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Path security tests (Stage 7 - Static-File Security Audit)
+add_executable(aevrix_path_security_tests
+    tests/path_security_tests.cpp
+    src/static_file_server.cpp
+    src/logger.cpp
+)
+
+# Ensure path security tests can find aevrix headers
+target_include_directories(aevrix_path_security_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Ensure tests can find aevrix headers
 target_include_directories(aevrix_router_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
@@ -303,9 +319,10 @@ if(WIN32)
     target_link_libraries(aevrix_connection_nonblocking_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_connection_manager_tests PRIVATE ws2_32)
     target_link_libraries(aevrix_output_state_machine_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_timeout_enforcement_tests PRIVATE ws2_32)
+    target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
     # aevrix_http_incremental_parser_tests doesn't need ws2_32 (uses simulated buffers)
     # target_link_libraries(aevrix_http_incremental_parser_tests PRIVATE ws2_32)
-    # target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
 endif()
 
 # Register HTTP response tests
@@ -328,6 +345,15 @@ add_test(NAME aevrix_connection_manager_tests COMMAND aevrix_connection_manager_
 
 # Register output state machine tests (Stage 4 - Response/Output State Machine)
 add_test(NAME aevrix_output_state_machine_tests COMMAND aevrix_output_state_machine_tests)
+
+# Register timeout enforcement tests (Stage 6 - Timeout Enforcement)
+add_test(NAME aevrix_timeout_enforcement_tests COMMAND aevrix_timeout_enforcement_tests)
+
+# Register path security tests (Stage 7 - Static-File Security Audit)
+# Skipped on Windows (requires Linux filesystem)
+if(UNIX)
+    add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
+endif()
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)

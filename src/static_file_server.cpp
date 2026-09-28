@@ -163,7 +163,7 @@ std::string StaticFileServer::normalize_path(const std::string& path) const {
 
 std::string StaticFileServer::url_decode(const std::string& encoded) const {
     std::ostringstream decoded;
-    
+
     for (size_t i = 0; i < encoded.length(); ++i) {
         if (encoded[i] == '%' && i + 2 < encoded.length()) {
             // Decode %XX sequence
@@ -183,8 +183,15 @@ std::string StaticFileServer::url_decode(const std::string& encoded) const {
             decoded << encoded[i];
         }
     }
-    
-    return decoded.str();
+
+    // Stage 7: Reject double-encoded paths (containing '%' after decoding)
+    std::string result = decoded.str();
+    if (result.find('%') != std::string::npos) {
+        std::cerr << "Path validation failed: double-encoded path detected\n";
+        throw std::runtime_error("Double-encoded path rejected");
+    }
+
+    return result;
 }
 
 std::filesystem::path StaticFileServer::resolve_path(const std::string& request_target) const {
@@ -202,31 +209,31 @@ std::filesystem::path StaticFileServer::resolve_path(const std::string& request_
 
 bool StaticFileServer::validate_path(const std::filesystem::path& resolved_path) const {
     try {
-        // Make both paths absolute and normalized for comparison
-        std::filesystem::path abs_resolved = std::filesystem::absolute(resolved_path).lexically_normal();
-        std::filesystem::path abs_root = document_root_path_.lexically_normal();
-        
-        // Check if the resolved path starts with the document root
-        // This ensures the path is within the document root
-        auto resolved_it = abs_resolved.begin();
-        auto root_it = abs_root.begin();
-        
-        // Compare each component
-        for (; root_it != abs_root.end(); ++root_it, ++resolved_it) {
-            if (resolved_it == abs_resolved.end()) {
-                // Resolved path is shorter than root - invalid
-                return false;
-            }
-            
-            if (*resolved_it != *root_it) {
-                // Path component differs - escape attempt
+        // Stage 7: Use std::filesystem::weakly_canonical to resolve symlinks
+        // This implements Policy A: symlinks allowed only if final resolved target remains inside document root
+        std::filesystem::path abs_resolved = std::filesystem::weakly_canonical(std::filesystem::absolute(resolved_path));
+        std::filesystem::path abs_root = std::filesystem::weakly_canonical(std::filesystem::absolute(document_root_path_));
+
+        // Stage 7: Use path-component-aware comparison instead of string prefix
+        // This prevents "/root/www-secret" from matching "/root/www"
+        std::filesystem::path relative_path = std::filesystem::relative(abs_resolved, abs_root);
+
+        // If relative path starts with "..", the path escapes the document root
+        if (relative_path.begin() != relative_path.end() && *relative_path.begin() == "..") {
+            std::cerr << "Path validation failed: path escapes document root via symlink\n";
+            return false;
+        }
+
+        // Check if the relative path is within root (no ".." components)
+        for (const auto& component : relative_path) {
+            if (component == "..") {
+                std::cerr << "Path validation failed: path contains '..' component\n";
                 return false;
             }
         }
-        
-        // If we've matched all root components, the path is within root
+
         return true;
-        
+
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Path validation error: " << e.what() << "\n";
         return false;

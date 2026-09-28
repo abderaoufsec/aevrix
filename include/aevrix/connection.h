@@ -489,6 +489,34 @@ public:
     bool has_write_timeout(const ServerConfig& config) const;
 
     // =========================================================================
+    // Deadline Management (Stage 6 - Timeout Enforcement)
+    // =========================================================================
+
+    /**
+     * @brief Set deadline based on current connection state
+     * 
+     * @param config Server configuration with timeout values
+     */
+    void set_deadline(const ServerConfig& config);
+
+    /**
+     * @brief Check if deadline has been exceeded
+     * 
+     * @return true if deadline exceeded, false otherwise
+     */
+    bool has_deadline_exceeded() const;
+
+    /**
+     * @brief Mark worker as active (don't timeout while worker is running)
+     */
+    void set_worker_active(bool active) { worker_active_ = active; }
+
+    /**
+     * @brief Check if worker is active
+     */
+    bool is_worker_active() const { return worker_active_; }
+
+    // =========================================================================
     // Connection Identifiers
     // =========================================================================
 
@@ -627,6 +655,13 @@ private:
 
     std::chrono::steady_clock::time_point created_at_;      // When connection was created
     std::chrono::steady_clock::time_point last_activity_;  // Last I/O activity
+
+    // =========================================================================
+    // Deadlines (Stage 6 - Timeout Enforcement)
+    // =========================================================================
+
+    std::chrono::steady_clock::time_point deadline_;  // Current deadline for timeout
+    bool worker_active_ = false;  // Whether a worker task is active (Stage 6)
 };
 
 } // namespace aevrix

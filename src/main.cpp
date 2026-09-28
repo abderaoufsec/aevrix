@@ -465,11 +465,15 @@ aevrix::http::HttpResponse generate_response(const aevrix::http::HttpRequest& re
  * @return true if connection should remain open, false if it should close
  */
 #ifdef __linux__
-bool handle_write_event(std::shared_ptr<aevrix::Connection> conn, 
-                        aevrix::EventLoop& event_loop) {
-    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+bool handle_write_event(std::shared_ptr<aevrix::Connection> conn,
+                        aevrix::EventLoop& event_loop,
+                        const aevrix::ServerConfig& config) {
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                          "handle_write_event called");
-    
+
+    // Stage 6: Update deadline on write activity
+    conn->set_deadline(config);
+
     // Perform nonblocking write
     auto write_result = conn->write_nonblocking();
     
@@ -549,15 +553,18 @@ bool handle_write_event(std::shared_ptr<aevrix::Connection> conn,
  * @return true if connection should remain open, false if it should close
  */
 #ifdef __linux__
-bool handle_read_event(std::shared_ptr<aevrix::Connection> conn, 
+bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
                        [[maybe_unused]] aevrix::Router& router,
                        aevrix::EventLoop& event_loop,
                        aevrix::WorkerPool& worker_pool,
                        aevrix::WorkerCompletionHandler& completion_handler,
                        const aevrix::ServerConfig& config) {
-    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                          "handle_read_event called");
-    
+
+    // Stage 6: Update deadline on read activity
+    conn->set_deadline(config);
+
     // Perform nonblocking read
     auto read_result = conn->read_nonblocking();
     
@@ -619,6 +626,9 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
         
         // Submit task to worker pool
         try {
+            // Stage 6: Mark worker as active (don't timeout while worker is running)
+            conn->set_worker_active(true);
+
             // Submit task asynchronously (don't wait for result)
             worker_pool.submit<aevrix::WorkerResult>(
                 [task, &completion_handler]() mutable {
@@ -1070,7 +1080,7 @@ int main(int argc, char* argv[]) {
             // Add completion handler eventfd to event loop (Stage 5)
             if (completion_handler.event_fd() >= 0) {
                 event_loop.add_fd(completion_handler.event_fd(), EPOLLIN,
-                    [&completion_handler, &connection_manager, &event_loop]([[maybe_unused]] int fd, aevrix::EventType event) {
+                    [&completion_handler, &connection_manager, &event_loop, &config]([[maybe_unused]] int fd, aevrix::EventType event) {
                         if (event == aevrix::EventType::Readable) {
                             // Clear the eventfd
                             completion_handler.clear_event();
@@ -1085,10 +1095,14 @@ int main(int argc, char* argv[]) {
                                 // Look up connection by ID
                                 auto conn = connection_manager.get_connection_by_id(result->connection_id);
                                 if (conn) {
+                                    // Stage 6: Mark worker as inactive and update deadline
+                                    conn->set_worker_active(false);
+                                    conn->set_deadline(config);
+
                                     // Connection still exists, apply result
                                     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, result->connection_id,
                                                                          "Worker result received, applying to connection");
-                                    
+
                                     // Generate response from worker result
                                     aevrix::http::HttpResponse response;
                                     if (result->status_code == 200) {
@@ -1162,7 +1176,7 @@ int main(int argc, char* argv[]) {
                                             // Stage 4: Handle EPOLLOUT event
                                             auto conn_ptr = connection_manager.get_connection(client_fd_value);
                                             if (conn_ptr) {
-                                                bool keep_alive = handle_write_event(conn_ptr, event_loop);
+                                                bool keep_alive = handle_write_event(conn_ptr, event_loop, config);
                                                 if (!keep_alive) {
                                                     event_loop.remove_fd(client_fd_value);
                                                     connection_manager.remove_connection(client_fd_value);
@@ -1192,8 +1206,15 @@ int main(int argc, char* argv[]) {
             
             aevrix::g_logger.info("Starting event loop...");
             while (!aevrix::g_signal_handler.shutdown_requested()) {
-                if (!event_loop.run(1000)) {  // 1 second timeout for shutdown check
+                // Run event loop with 1 second timeout for periodic timeout sweeping
+                if (!event_loop.run(1000)) {
                     break;
+                }
+
+                // Stage 6: Sweep timed-out connections after each timeout
+                size_t timed_out = connection_manager.sweep_timeouts();
+                if (timed_out > 0) {
+                    aevrix::g_logger.info("Swept " + std::to_string(timed_out) + " timed-out connections");
                 }
             }
             

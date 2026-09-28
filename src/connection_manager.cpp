@@ -169,13 +169,16 @@ size_t ConnectionManager::sweep_timeouts() {
     }
     
     // Remove timed-out connections
+    // Note: This only removes from ConnectionManager. The socket is closed by
+    // the Connection destructor, which will trigger EPOLLHUP in the event loop.
+    // The event loop callback will then remove the fd from epoll.
     for (int fd : timed_out_fds) {
         auto it = connections_.find(fd);
         if (it != connections_.end()) {
             uint64_t connection_id = it->second->id();
             connections_.erase(it);
             removed++;
-            
+
             aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, connection_id,
                                                  "Removed timed-out connection (fd=" + std::to_string(fd) + ")");
         }
@@ -231,27 +234,9 @@ uint64_t ConnectionManager::generate_connection_id() {
 }
 
 bool ConnectionManager::is_timed_out(const Connection& conn) const {
-    // Check header timeout
-    if (conn.has_header_timeout(*config_)) {
-        return true;
-    }
-    
-    // Check body timeout
-    if (conn.has_body_timeout(*config_)) {
-        return true;
-    }
-    
-    // Check write timeout
-    if (conn.has_write_timeout(*config_)) {
-        return true;
-    }
-    
-    // Check keep-alive timeout
-    if (conn.has_keep_alive_timeout(*config_)) {
-        return true;
-    }
-    
-    return false;
+    // Stage 6: Use deadline-based timeout checking
+    // This is more accurate than activity-based checking and respects worker activity
+    return conn.has_deadline_exceeded();
 }
 
 std::string ConnectionManager::get_timeout_reason(const Connection& conn) const {
