@@ -107,6 +107,19 @@ std::shared_ptr<Connection> ConnectionManager::get_connection(int fd) {
     return it->second;
 }
 
+std::shared_ptr<Connection> ConnectionManager::get_connection_by_id(uint64_t connection_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Linear search by ID (Stage 5 - could be optimized with a secondary map if needed)
+    for (const auto& [fd, conn] : connections_) {
+        if (conn->id() == connection_id) {
+            return conn;
+        }
+    }
+    
+    return nullptr;
+}
+
 bool ConnectionManager::has_connection(int fd) const {
     std::lock_guard<std::mutex> lock(mutex_);
     

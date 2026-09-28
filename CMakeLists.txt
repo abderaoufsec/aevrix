@@ -191,6 +191,8 @@ add_executable(aevrix
     src/http_cache.cpp
     src/metrics.cpp
     src/observability.cpp
+    src/worker_completion_handler.cpp
+    src/filesystem_worker.cpp
 )
 
 # Threading support for worker pool

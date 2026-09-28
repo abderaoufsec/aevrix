@@ -131,6 +131,18 @@ public:
     std::shared_ptr<Connection> get_connection(int fd);
 
     /**
+     * @brief Look up a connection by connection ID (Stage 5 - WorkerPool Integration)
+     * 
+     * Returns a shared pointer to the connection with the given ID.
+     * If the connection is not found, returns nullptr.
+     * This is used for worker completion handling where workers only have connection IDs.
+     * 
+     * @param connection_id The connection ID to look up
+     * @return std::shared_ptr<Connection> The connection, or nullptr if not found
+     */
+    std::shared_ptr<Connection> get_connection_by_id(uint64_t connection_id);
+
+    /**
      * @brief Check if a connection exists
      * 
      * @param fd The file descriptor to check

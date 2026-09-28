@@ -62,6 +62,9 @@
 #include "aevrix/config_parser.h"
 #include "aevrix/logger.h"
 #include "aevrix/signal_handler.h"
+#include "aevrix/worker_task.h"
+#include "aevrix/worker_completion_handler.h"
+#include "aevrix/filesystem_worker.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
@@ -423,71 +426,22 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
  * @return The generated HTTP response
  */
 aevrix::http::HttpResponse generate_response(const aevrix::http::HttpRequest& request,
-                                               aevrix::StaticFileServer& file_server,
                                                [[maybe_unused]] aevrix::Router& router) {
-    // Try router first
+    // Stage 5: Only handle router responses here
+    // Static file serving is now handled by WorkerPool
     try {
+        aevrix::http::HttpResponse response = router.route(request);
+        // Router returns response directly, not optional
+        return response;
     } catch (const std::exception& e) {
-        // Router returned an error, fall back to static file serving
-        aevrix::g_logger.warn("Router error: " + std::string(e.what()) + ", falling back to static file serving");
-    }
-    
-    // No route found or router error, fall back to static file serving
-    // Check if client wants keep-alive
-    bool keep_alive = wants_keep_alive(request);
-    
-    // Check the method first
-    if (request.method() == aevrix::http::HttpMethod::GET || request.method() == aevrix::http::HttpMethod::HEAD) {
-        // Serve the file using StaticFileServer
-        auto [content, mime_type, status_code] = file_server.serve_file(request.target());
-        
-        if (status_code == 200) {
-            // File found and read successfully
-            if (request.method() == aevrix::http::HttpMethod::GET) {
-                aevrix::http::HttpResponse response(aevrix::http::StatusCode::OK, content);
-                response.set_header("Content-Type", mime_type);
-                response.set_header("Server", "Aevrix/0.1.0");
-                response.set_connection_policy(keep_alive ? aevrix::http::ConnectionPolicy::KeepAlive : aevrix::http::ConnectionPolicy::Close);
-                return response;
-            } else {
-                // HEAD request - return 200 OK with no body
-                aevrix::http::HttpResponse response(aevrix::http::StatusCode::OK);
-                response.set_header("Content-Type", mime_type);
-                response.set_header("Content-Length", std::to_string(content.length()));
-                response.set_header("Server", "Aevrix/0.1.0");
-                response.set_connection_policy(keep_alive ? aevrix::http::ConnectionPolicy::KeepAlive : aevrix::http::ConnectionPolicy::Close);
-                return response;
-            }
-        } else if (status_code == 404) {
-            // File not found
-            aevrix::http::HttpResponse response(aevrix::http::StatusCode::NotFound, "Not Found");
-            response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
-            return response;
-        } else if (status_code == 403) {
-            // Forbidden (directory access or path traversal attempt)
-            aevrix::http::HttpResponse response(aevrix::http::StatusCode::Forbidden, "Forbidden");
-            response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
-            return response;
-        } else {
-            // Internal server error
-            aevrix::http::HttpResponse response(aevrix::http::StatusCode::InternalServerError, "Internal Server Error");
-            response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
-            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
-            return response;
-        }
-    } else {
-        // Return 405 Method Not Allowed for unsupported methods
-        aevrix::http::HttpResponse response(aevrix::http::StatusCode::MethodNotAllowed, 
-                               "Method not allowed: " + aevrix::http::http_method_to_string(request.method()));
+        // Router returned an error
+        aevrix::g_logger.warn("Router error: " + std::string(e.what()));
+        // Return 500 error
+        aevrix::http::HttpResponse response(aevrix::http::StatusCode::InternalServerError, 
+                               "Internal Server Error");
         response.set_header("Content-Type", "text/plain");
         response.set_header("Server", "Aevrix/0.1.0");
-        response.set_header("Allow", "GET, HEAD");  // Indicate allowed methods
-        response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);  // Always close on error
+        response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
         return response;
     }
 }
@@ -596,9 +550,11 @@ bool handle_write_event(std::shared_ptr<aevrix::Connection> conn,
  */
 #ifdef __linux__
 bool handle_read_event(std::shared_ptr<aevrix::Connection> conn, 
-                       aevrix::StaticFileServer& file_server, 
-                       aevrix::Router& router,
-                       aevrix::EventLoop& event_loop) {
+                       [[maybe_unused]] aevrix::Router& router,
+                       aevrix::EventLoop& event_loop,
+                       aevrix::WorkerPool& worker_pool,
+                       aevrix::WorkerCompletionHandler& completion_handler,
+                       const aevrix::ServerConfig& config) {
     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
                                          "handle_read_event called");
     
@@ -632,8 +588,6 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
         aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
                                              "Parser error: " + conn->parse_error_message());
         
-        // For Stage 3, we close the connection on parser error
-        // In Stage 4, this will be integrated with the output state machine
         return false;
     }
     
@@ -646,7 +600,7 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
     
     if (conn->is_request_complete()) {
         aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, conn->id(), conn->request_id(),
-                                         "Request complete, generating response");
+                                         "Request complete, submitting to WorkerPool");
         
         // Extract the parsed request
         aevrix::http::HttpRequest request = conn->parser().request();
@@ -657,27 +611,72 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
         // Increment request ID
         conn->increment_request_id();
         
-        // Generate response (Stage 4)
-        aevrix::http::HttpResponse response = generate_response(request, file_server, router);
+        // Stage 5: Submit blocking filesystem work to WorkerPool
+        // Create worker task with immutable data
+        bool is_head_request = (request.method() == aevrix::http::HttpMethod::HEAD);
+        aevrix::WorkerTask task(conn->id(), request.target(), 
+                               config.document_root(), is_head_request);
         
-        // Serialize response
-        aevrix::http::HttpResponseSerializer serializer;
-        std::string response_data = serializer.serialize(response);
-        
-        // Set output buffer
-        conn->set_output_buffer(response_data);
-        
-        // Enable EPOLLOUT for writing response
-        event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
-        
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
-                                             "Response generated, EPOLLOUT enabled");
+        // Submit task to worker pool
+        try {
+            // Submit task asynchronously (don't wait for result)
+            worker_pool.submit<aevrix::WorkerResult>(
+                [task, &completion_handler]() mutable {
+                    // Execute filesystem work in worker thread
+                    auto result = aevrix::execute_filesystem_task(task);
+                    // Enqueue result for event loop
+                    completion_handler.enqueue_result(std::move(result));
+                    return result;  // Return WorkerResult for WorkerPool
+                }
+            );
+            
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
+                                               "Task submitted to WorkerPool asynchronously");
+            
+            // For now, we'll use a simple approach: wait for the result
+            // TODO: Implement true async with eventfd notification
+            // For Stage 5, we acknowledge this is a limitation
+            // The blocking work is in worker threads, but event loop still waits
+            
+            // For true async, we would:
+            // 1. Add completion_handler.event_fd() to event loop with EPOLLIN
+            // 2. When eventfd is readable, call completion_handler.dequeue_result()
+            // 3. Look up connection by ID and apply result
+            // 4. This requires significant Connection class changes
+            
+            // For this implementation, we'll return true and let the connection
+            // wait for the worker to complete via a different mechanism
+            // This is a known limitation that will be addressed in a future update
+            
+            // Placeholder: We need to store the connection ID and wait for completion
+            // For now, we'll mark the connection as waiting for worker
+            // and handle completion separately
+            
+            return true;  // Keep connection alive, waiting for worker
+            
+        } catch (const std::exception& e) {
+            // Worker pool queue full or shut down
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
+                                                 "Failed to submit task to WorkerPool: " + std::string(e.what()));
+            
+            // Return 503 Service Unavailable
+            aevrix::http::HttpResponse response(aevrix::http::StatusCode::ServiceUnavailable, 
+                                   "Service Unavailable: Worker pool overloaded");
+            response.set_header("Content-Type", "text/plain");
+            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
+            
+            aevrix::http::HttpResponseSerializer serializer;
+            std::string response_data = serializer.serialize(response);
+            conn->set_output_buffer(response_data);
+            event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+            return false;  // Close connection after error response
+        }
         
         // Check if there's unconsumed data (pipelined requests)
         if (conn->has_unconsumed_data()) {
             aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                                  "Unconsumed data in buffer (pipelined request)");
-            // Feed the unconsumed data to a fresh parser
             conn->reset_parser();
             if (!conn->feed_parser()) {
                 aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
@@ -685,12 +684,9 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
                 return false;
             }
         } else {
-            // No unconsumed data, reset parser for next request
             conn->reset_parser();
         }
         
-        // For Stage 4, we complete the read side and enable output
-        // The response will be written in the EPOLLOUT handler
         return true;
     }
     
@@ -980,10 +976,11 @@ int main(int argc, char* argv[]) {
 
         aevrix::g_logger.info("Attempting to create static file server with root: " + config.document_root());
 
-        // Create static file server
-        aevrix::StaticFileServer file_server(config.document_root());
+        // Note: StaticFileServer is now used only by worker threads
+        // The event loop no longer holds a StaticFileServer instance
+        // Each worker task creates its own temporary instance
 
-        aevrix::g_logger.info("Static file server created successfully");
+        aevrix::g_logger.info("Static file serving configured with root: " + config.document_root());
 
         // Create TCP listener on configured host:port
         aevrix::TcpListener listener(config.host(), config.port());
@@ -994,12 +991,15 @@ int main(int argc, char* argv[]) {
         }
 
         aevrix::g_logger.info("Server running on http://" + listener.host() + ":" + std::to_string(listener.port()) + "/");
-        aevrix::g_logger.info("Serving files from: " + file_server.document_root());
+        aevrix::g_logger.info("Serving files from: " + config.document_root());
         
         // Create worker pool for blocking operations
         // Use configured number of workers and queue size
         // This keeps blocking filesystem work out of the event loop
         aevrix::WorkerPool worker_pool(config.workers(), 128);
+        
+        // Create worker completion handler for async result delivery
+        aevrix::WorkerCompletionHandler completion_handler;
         
         // Create router for application-level routing
         aevrix::Router router;
@@ -1067,9 +1067,72 @@ int main(int argc, char* argv[]) {
             // Create ConnectionManager (Stage 2)
             aevrix::ConnectionManager connection_manager(&config);
             
+            // Add completion handler eventfd to event loop (Stage 5)
+            if (completion_handler.event_fd() >= 0) {
+                event_loop.add_fd(completion_handler.event_fd(), EPOLLIN,
+                    [&completion_handler, &connection_manager, &event_loop]([[maybe_unused]] int fd, aevrix::EventType event) {
+                        if (event == aevrix::EventType::Readable) {
+                            // Clear the eventfd
+                            completion_handler.clear_event();
+                            
+                            // Process all available results
+                            while (true) {
+                                auto result = completion_handler.dequeue_result();
+                                if (!result.has_value()) {
+                                    break;  // No more results
+                                }
+                                
+                                // Look up connection by ID
+                                auto conn = connection_manager.get_connection_by_id(result->connection_id);
+                                if (conn) {
+                                    // Connection still exists, apply result
+                                    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, result->connection_id,
+                                                                         "Worker result received, applying to connection");
+                                    
+                                    // Generate response from worker result
+                                    aevrix::http::HttpResponse response;
+                                    if (result->status_code == 200) {
+                                        response = aevrix::http::HttpResponse(aevrix::http::StatusCode::OK, result->content);
+                                        response.set_header("Content-Type", result->mime_type);
+                                        response.set_header("Server", "Aevrix/0.1.0");
+                                        response.set_connection_policy(conn->keep_alive() ? 
+                                            aevrix::http::ConnectionPolicy::KeepAlive : 
+                                            aevrix::http::ConnectionPolicy::Close);
+                                    } else {
+                                        // Error response
+                                        response = aevrix::http::HttpResponse(
+                                            static_cast<aevrix::http::StatusCode>(result->status_code), 
+                                            result->error_message);
+                                        response.set_header("Content-Type", "text/plain");
+                                        response.set_header("Server", "Aevrix/0.1.0");
+                                        response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
+                                    }
+                                    
+                                    // Serialize response
+                                    aevrix::http::HttpResponseSerializer serializer;
+                                    std::string response_data = serializer.serialize(response);
+                                    
+                                    // Set output buffer
+                                    conn->set_output_buffer(response_data);
+                                    
+                                    // Enable EPOLLOUT for writing response
+                                    event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+                                    
+                                    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, result->connection_id,
+                                                                         "Response generated from worker result, EPOLLOUT enabled");
+                                } else {
+                                    // Connection no longer exists, discard result
+                                    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, result->connection_id,
+                                                                         "Worker result received but connection no longer exists, discarding");
+                                }
+                            }
+                        }
+                    });
+            }
+            
             // Add listener socket to event loop
             if (!event_loop.add_fd(listener.get_socket(), EPOLLIN, 
-                [&listener, &connection_manager, &file_server, &router, &event_loop, &connection_count]([[maybe_unused]] int fd, aevrix::EventType event) {
+                [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count]([[maybe_unused]] int fd, aevrix::EventType event) {
                     if (event == aevrix::EventType::Readable) {
                         // Accept new connection
                         auto client_fd = listener.accept();
@@ -1080,11 +1143,11 @@ int main(int argc, char* argv[]) {
                                 // Add connection to event loop for EPOLLIN
                                 int client_fd_value = client_fd.value();
                                 event_loop.add_fd(client_fd_value, EPOLLIN, 
-                                    [client_fd_value, &connection_manager, &file_server, &router, &event_loop]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                    [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config]([[maybe_unused]] int, aevrix::EventType client_event) {
                                         if (client_event == aevrix::EventType::Readable) {
                                             auto conn_ptr = connection_manager.get_connection(client_fd_value);
                                             if (conn_ptr) {
-                                                bool keep_alive = handle_read_event(conn_ptr, file_server, router, event_loop);
+                                                bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
                                                 if (!keep_alive) {
                                                     // Remove from event loop first (prevents further events)
                                                     event_loop.remove_fd(client_fd_value);
@@ -1141,6 +1204,10 @@ int main(int argc, char* argv[]) {
 #else
         // Windows/Unix: Use blocking loop for development
         aevrix::g_logger.info("Using blocking loop for development");
+        
+        // Create static file server for Windows fallback
+        aevrix::StaticFileServer file_server(config.document_root());
+        
         while (!aevrix::g_signal_handler.shutdown_requested()) {
             aevrix::g_logger.info("Waiting for connection...");
 
