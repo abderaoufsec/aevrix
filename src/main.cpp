@@ -68,6 +68,9 @@
 #ifdef __linux__
 #include "aevrix/event_loop.h"
 #endif
+#ifdef AEVRIX_ENABLE_TLS
+#include "aevrix/tls_context.h"
+#endif
 #include <iostream>
 #include <string>
 #include <cstdint>  // For uint16_t
@@ -476,50 +479,50 @@ bool handle_write_event(std::shared_ptr<aevrix::Connection> conn,
 
     // Perform nonblocking write
     auto write_result = conn->write_nonblocking();
-    
+
     if (write_result == aevrix::Connection::IoResult::InProgress) {
         // Send buffer full, wait for next EPOLLOUT
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                              "Send buffer full, waiting for EPOLLOUT");
         return true;  // Keep connection alive, wait for EPOLLOUT
     }
-    
+
     if (write_result == aevrix::Connection::IoResult::Error) {
         // Socket error
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
                                              "Socket error during write");
         return false;  // Close connection
     }
-    
+
     // Check if output is complete
     if (conn->is_output_complete()) {
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                              "Output complete");
-        
+
         // Output complete - check keep-alive
         if (conn->keep_alive()) {
             // Keep connection alive for next request
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                                  "Keep-alive: preparing for next request");
-            
+
             // Disable EPOLLOUT (no more output to write)
             event_loop.modify_fd(conn->fd(), EPOLLIN);
-            
+
             // Reset output buffer for next response
             conn->clear_output_buffer();
-            
+
             // Reset parser for next request
             conn->reset_parser();
-            
+
             return true;  // Keep connection alive
         } else {
             // Close connection
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(), 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(),
                                                  "Connection close requested");
             return false;  // Close connection
         }
     }
-    
+
     // Output not yet complete, wait for more EPOLLOUT
     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                          "Output incomplete, waiting for EPOLLOUT");
@@ -567,63 +570,74 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
 
     // Perform nonblocking read
     auto read_result = conn->read_nonblocking();
-    
+
     if (read_result == aevrix::Connection::IoResult::InProgress) {
         // No data available right now, wait for next EPOLLIN
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                              "No data available, waiting for EPOLLIN");
         return true;  // Keep connection alive, wait for more data
     }
-    
+
     if (read_result == aevrix::Connection::IoResult::Closed) {
         // Peer disconnected
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(),
                                              "Peer disconnected");
         return false;  // Close connection
     }
-    
+
     if (read_result == aevrix::Connection::IoResult::Error) {
         // Socket error
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
                                              "Socket error during read");
         return false;  // Close connection
     }
-    
+
     // Data received successfully - feed to parser
     if (!conn->feed_parser()) {
         // Parser error occurred
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
                                              "Parser error: " + conn->parse_error_message());
-        
+
         return false;
     }
-    
+
+#ifdef AEVRIX_ENABLE_TLS
+    // Phase 21: Handle TLS WANT_READ/WANT_WRITE after read
+    if (conn->is_tls_enabled() && conn->tls_connection()) {
+        // Check if TLS needs different epoll interest
+        // This is handled by the TLS read path in Connection::read_nonblocking()
+        // If SSL_read returned WANT_WRITE, we need to enable EPOLLOUT
+        // For now, we'll check the connection's TLS state and update accordingly
+        // A more sophisticated approach would track the TLS I/O requirement explicitly
+    }
+#endif
+
     // Check parser state
     if (conn->has_parse_error()) {
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
                                              "Parser has error: " + conn->parse_error_message());
         return false;  // Close connection on error
     }
-    
+
     if (conn->is_request_complete()) {
         aevrix::g_logger.log_with_request(aevrix::LogLevel::DEBUG, conn->id(), conn->request_id(),
                                          "Request complete, submitting to WorkerPool");
-        
+
         // Extract the parsed request
         aevrix::http::HttpRequest request = conn->parser().request();
-        
+
         // Evaluate keep-alive
         conn->evaluate_keep_alive(request);
-        
+
         // Increment request ID
         conn->increment_request_id();
-        
+
         // Stage 5: Submit blocking filesystem work to WorkerPool
         // Create worker task with immutable data
         bool is_head_request = (request.method() == aevrix::http::HttpMethod::HEAD);
-        aevrix::WorkerTask task(conn->id(), request.target(), 
+        aevrix::WorkerTask task(conn->id(), request.target(),
                                config.document_root(), is_head_request);
-        
+
         // Submit task to worker pool
         try {
             // Stage 6: Mark worker as active (don't timeout while worker is running)
@@ -639,50 +653,50 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
                     return result;  // Return WorkerResult for WorkerPool
                 }
             );
-            
+
             aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                                "Task submitted to WorkerPool asynchronously");
-            
+
             // For now, we'll use a simple approach: wait for the result
             // TODO: Implement true async with eventfd notification
             // For Stage 5, we acknowledge this is a limitation
             // The blocking work is in worker threads, but event loop still waits
-            
+
             // For true async, we would:
             // 1. Add completion_handler.event_fd() to event loop with EPOLLIN
             // 2. When eventfd is readable, call completion_handler.dequeue_result()
             // 3. Look up connection by ID and apply result
             // 4. This requires significant Connection class changes
-            
+
             // For this implementation, we'll return true and let the connection
             // wait for the worker to complete via a different mechanism
             // This is a known limitation that will be addressed in a future update
-            
+
             // Placeholder: We need to store the connection ID and wait for completion
             // For now, we'll mark the connection as waiting for worker
             // and handle completion separately
-            
+
             return true;  // Keep connection alive, waiting for worker
-            
+
         } catch (const std::exception& e) {
             // Worker pool queue full or shut down
             aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(),
                                                  "Failed to submit task to WorkerPool: " + std::string(e.what()));
-            
+
             // Return 503 Service Unavailable
-            aevrix::http::HttpResponse response(aevrix::http::StatusCode::ServiceUnavailable, 
+            aevrix::http::HttpResponse response(aevrix::http::StatusCode::ServiceUnavailable,
                                    "Service Unavailable: Worker pool overloaded");
             response.set_header("Content-Type", "text/plain");
             response.set_header("Server", "Aevrix/0.1.0");
             response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
-            
+
             aevrix::http::HttpResponseSerializer serializer;
             std::string response_data = serializer.serialize(response);
             conn->set_output_buffer(response_data);
             event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
             return false;  // Close connection after error response
         }
-        
+
         // Check if there's unconsumed data (pipelined requests)
         if (conn->has_unconsumed_data()) {
             aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
@@ -696,10 +710,10 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
         } else {
             conn->reset_parser();
         }
-        
+
         return true;
     }
-    
+
     // Request not yet complete, wait for more data
     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                          "Request incomplete, waiting for more data");
@@ -1007,12 +1021,55 @@ int main(int argc, char* argv[]) {
         // Use configured number of workers and queue size
         // This keeps blocking filesystem work out of the event loop
         aevrix::WorkerPool worker_pool(config.workers(), 128);
-        
+
         // Create worker completion handler for async result delivery
         aevrix::WorkerCompletionHandler completion_handler;
-        
+
         // Create router for application-level routing
         aevrix::Router router;
+
+#ifdef AEVRIX_ENABLE_TLS
+        // Phase 21: Initialize TLS context if TLS is enabled
+        std::unique_ptr<aevrix::TlsContext> tls_context;
+        std::unique_ptr<aevrix::TcpListener> tls_listener;
+
+        if (config.tls_enabled()) {
+            aevrix::g_logger.info("TLS enabled, initializing TLS context");
+
+            try {
+                // Create TLS context
+                tls_context = std::make_unique<aevrix::TlsContext>();
+
+                // Load certificate and private key
+                tls_context->load_certificate_and_key(config.tls_cert_file(), config.tls_key_file());
+
+                // Configure protocol versions if specified
+                if (!config.tls_min_version().empty()) {
+                    tls_context->set_min_protocol_version(config.tls_min_version());
+                }
+                if (!config.tls_max_version().empty()) {
+                    tls_context->set_max_protocol_version(config.tls_max_version());
+                }
+
+                aevrix::g_logger.info("TLS context initialized successfully");
+
+                // Create TLS listener on configured TLS port
+                tls_listener = std::make_unique<aevrix::TcpListener>(config.host(), config.tls_port());
+
+                if (!tls_listener->is_listening()) {
+                    aevrix::g_logger.error("Failed to start TLS listener: " + tls_listener->error_message());
+                    return 1;
+                }
+
+                aevrix::g_logger.info("TLS listener started on " + config.host() + ":" + std::to_string(config.tls_port()));
+            } catch (const std::exception& e) {
+                aevrix::g_logger.error("TLS initialization failed: " + std::string(e.what()));
+                return 1;
+            }
+        } else {
+            aevrix::g_logger.info("TLS disabled, running in plaintext mode");
+        }
+#endif
         
         // Register GET / route (root endpoint)
         router.add_route("GET", "/", [](const HttpRequest& request) {
@@ -1145,8 +1202,12 @@ int main(int argc, char* argv[]) {
             }
             
             // Add listener socket to event loop
-            if (!event_loop.add_fd(listener.get_socket(), EPOLLIN, 
-                [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count]([[maybe_unused]] int fd, aevrix::EventType event) {
+            if (!event_loop.add_fd(listener.get_socket(), EPOLLIN,
+                [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count
+#ifdef AEVRIX_ENABLE_TLS
+                 , tls_context.get()
+#endif
+                ]([[maybe_unused]] int fd, aevrix::EventType event) {
                     if (event == aevrix::EventType::Readable) {
                         // Accept new connection
                         auto client_fd = listener.accept();
@@ -1156,33 +1217,69 @@ int main(int argc, char* argv[]) {
                             if (conn) {
                                 // Add connection to event loop for EPOLLIN
                                 int client_fd_value = client_fd.value();
-                                event_loop.add_fd(client_fd_value, EPOLLIN, 
-                                    [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config]([[maybe_unused]] int, aevrix::EventType client_event) {
-                                        if (client_event == aevrix::EventType::Readable) {
-                                            auto conn_ptr = connection_manager.get_connection(client_fd_value);
-                                            if (conn_ptr) {
-                                                bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
-                                                if (!keep_alive) {
-                                                    // Remove from event loop first (prevents further events)
+                                event_loop.add_fd(client_fd_value, EPOLLIN,
+                                    [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config
+#ifdef AEVRIX_ENABLE_TLS
+                                     , tls_context.get()
+#endif
+                                    ]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                        auto conn_ptr = connection_manager.get_connection(client_fd_value);
+                                        if (!conn_ptr) {
+                                            // Connection already removed, clean up event loop
+                                            event_loop.remove_fd(client_fd_value);
+                                            return;
+                                        }
+
+#ifdef AEVRIX_ENABLE_TLS
+                                        // Phase 21: Handle TLS handshake if enabled
+                                        if (conn_ptr->is_tls_enabled() && conn_ptr->tls_connection() &&
+                                            conn_ptr->state() == aevrix::ConnectionState::TlsHandshake) {
+                                            if (client_event == aevrix::EventType::Readable || client_event == aevrix::EventType::Writable) {
+                                                auto io_req = conn_ptr->tls_connection()->do_handshake();
+
+                                                if (conn_ptr->tls_connection()->is_handshake_complete()) {
+                                                    // Handshake complete, transition to HTTP read
+                                                    conn_ptr->set_state(aevrix::ConnectionState::Reading);
+                                                    conn_ptr->set_read_state(aevrix::ReadState::Headers);
+                                                    event_loop.modify_fd(client_fd_value, EPOLLIN);
+                                                    aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn_ptr->id(), "TLS handshake complete, entering HTTP read state");
+                                                } else if (conn_ptr->tls_connection()->is_handshake_failed()) {
+                                                    // Handshake failed, close connection
                                                     event_loop.remove_fd(client_fd_value);
-                                                    // Then remove from connection manager (may destroy connection)
                                                     connection_manager.remove_connection(client_fd_value);
+                                                    aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, conn_ptr->id(), "TLS handshake failed, closing connection");
+                                                    return;
+                                                } else {
+                                                    // Handshake in progress, update epoll interest
+                                                    uint32_t events = EPOLLIN;
+                                                    if (io_req == aevrix::TlsIoRequirement::WantWrite) {
+                                                        events = EPOLLOUT;
+                                                    } else if (io_req == aevrix::TlsIoRequirement::WantRead) {
+                                                        events = EPOLLIN;
+                                                    } else if (io_req == aevrix::TlsIoRequirement::Both) {
+                                                        events = EPOLLIN | EPOLLOUT;
+                                                    }
+                                                    event_loop.modify_fd(client_fd_value, events);
+                                                    return;
                                                 }
-                                            } else {
-                                                // Connection already removed, clean up event loop
+                                            }
+                                        }
+#endif
+
+                                        if (client_event == aevrix::EventType::Readable) {
+                                            bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
+                                            if (!keep_alive) {
+                                                // Remove from event loop first (prevents further events)
                                                 event_loop.remove_fd(client_fd_value);
+                                                // Then remove from connection manager (may destroy connection)
+                                                connection_manager.remove_connection(client_fd_value);
                                             }
                                         } else if (client_event == aevrix::EventType::Writable) {
                                             // Stage 4: Handle EPOLLOUT event
-                                            auto conn_ptr = connection_manager.get_connection(client_fd_value);
-                                            if (conn_ptr) {
-                                                bool keep_alive = handle_write_event(conn_ptr, event_loop, config);
-                                                if (!keep_alive) {
-                                                    event_loop.remove_fd(client_fd_value);
-                                                    connection_manager.remove_connection(client_fd_value);
-                                                }
-                                            } else {
+                                            bool keep_alive = handle_write_event(conn_ptr, event_loop, config);
+                                            if (!keep_alive) {
                                                 event_loop.remove_fd(client_fd_value);
+                                                connection_manager.remove_connection(client_fd_value);
                                             }
                                         } else if (client_event == aevrix::EventType::Error || client_event == aevrix::EventType::Hangup) {
                                             // Remove from event loop first (prevents further events)
@@ -1191,7 +1288,7 @@ int main(int argc, char* argv[]) {
                                             connection_manager.remove_connection(client_fd_value);
                                         }
                                     });
-                                
+
                                 connection_count++;
                                 aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
                             } else {
@@ -1203,7 +1300,115 @@ int main(int argc, char* argv[]) {
                 aevrix::g_logger.error("Failed to add listener to event loop");
                 return 1;
             }
-            
+
+#ifdef AEVRIX_ENABLE_TLS
+            // Phase 21: Add TLS listener to event loop if TLS is enabled
+            if (tls_listener && tls_context) {
+                tls_listener->stop();  // Stop current blocking listener
+                if (!tls_listener->start(config.host(), config.tls_port(), true)) {  // Start with non-blocking
+                    aevrix::g_logger.error("Failed to start non-blocking TLS listener");
+                    return 1;
+                }
+
+                if (!event_loop.add_fd(tls_listener->get_socket(), EPOLLIN,
+                    [&tls_listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count, tls_context.get()]([[maybe_unused]] int fd, aevrix::EventType event) {
+                        if (event == aevrix::EventType::Readable) {
+                            // Accept new TLS connection
+                            auto client_fd = tls_listener->accept();
+                            if (client_fd.has_value()) {
+                                // Register connection with ConnectionManager
+                                auto conn = connection_manager.register_connection(client_fd.value());
+                                if (conn) {
+                                    // Initialize TLS for this connection
+                                    try {
+                                        conn->init_tls(*tls_context);
+                                        conn->set_state(aevrix::ConnectionState::TlsHandshake);
+                                        conn->set_deadline(config);
+                                    } catch (const std::exception& e) {
+                                        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, conn->id(), "Failed to initialize TLS: " + std::string(e.what()));
+                                        event_loop.remove_fd(client_fd.value());
+                                        connection_manager.remove_connection(client_fd.value());
+                                        return;
+                                    }
+
+                                    // Add connection to event loop for EPOLLIN (TLS handshake starts with read)
+                                    int client_fd_value = client_fd.value();
+                                    event_loop.add_fd(client_fd_value, EPOLLIN,
+                                        [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, tls_context.get()]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                            auto conn_ptr = connection_manager.get_connection(client_fd_value);
+                                            if (!conn_ptr) {
+                                                // Connection already removed, clean up event loop
+                                                event_loop.remove_fd(client_fd_value);
+                                                return;
+                                            }
+
+                                            // Phase 21: Handle TLS handshake
+                                            if (conn_ptr->is_tls_enabled() && conn_ptr->tls_connection() &&
+                                                conn_ptr->state() == aevrix::ConnectionState::TlsHandshake) {
+                                                if (client_event == aevrix::EventType::Readable || client_event == aevrix::EventType::Writable) {
+                                                    auto io_req = conn_ptr->tls_connection()->do_handshake();
+
+                                                    if (conn_ptr->tls_connection()->is_handshake_complete()) {
+                                                        // Handshake complete, transition to HTTP read
+                                                        conn_ptr->set_state(aevrix::ConnectionState::Reading);
+                                                        conn_ptr->set_read_state(aevrix::ReadState::Headers);
+                                                        event_loop.modify_fd(client_fd_value, EPOLLIN);
+                                                        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn_ptr->id(), "TLS handshake complete, entering HTTP read state");
+                                                    } else if (conn_ptr->tls_connection()->is_handshake_failed()) {
+                                                        // Handshake failed, close connection
+                                                        event_loop.remove_fd(client_fd_value);
+                                                        connection_manager.remove_connection(client_fd_value);
+                                                        aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, conn_ptr->id(), "TLS handshake failed, closing connection");
+                                                        return;
+                                                    } else {
+                                                        // Handshake in progress, update epoll interest
+                                                        uint32_t events = EPOLLIN;
+                                                        if (io_req == aevrix::TlsIoRequirement::WantWrite) {
+                                                            events = EPOLLOUT;
+                                                        } else if (io_req == aevrix::TlsIoRequirement::WantRead) {
+                                                            events = EPOLLIN;
+                                                        } else if (io_req == aevrix::TlsIoRequirement::Both) {
+                                                            events = EPOLLIN | EPOLLOUT;
+                                                        }
+                                                        event_loop.modify_fd(client_fd_value, events);
+                                                        return;
+                                                    }
+                                                }
+                                            }
+
+                                            // After handshake, use existing HTTP handlers
+                                            if (client_event == aevrix::EventType::Readable) {
+                                                bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
+                                                if (!keep_alive) {
+                                                    event_loop.remove_fd(client_fd_value);
+                                                    connection_manager.remove_connection(client_fd_value);
+                                                }
+                                            } else if (client_event == aevrix::EventType::Writable) {
+                                                bool keep_alive = handle_write_event(conn_ptr, event_loop, config);
+                                                if (!keep_alive) {
+                                                    event_loop.remove_fd(client_fd_value);
+                                                    connection_manager.remove_connection(client_fd_value);
+                                                }
+                                            } else if (client_event == aevrix::EventType::Error || client_event == aevrix::EventType::Hangup) {
+                                                event_loop.remove_fd(client_fd_value);
+                                                connection_manager.remove_connection(client_fd_value);
+                                            }
+                                        });
+
+                                    connection_count++;
+                                    aevrix::g_logger.info("Total connections handled: " + std::to_string(connection_count));
+                                } else {
+                                    aevrix::g_logger.warn("TLS connection rejected (at capacity)");
+                                }
+                            }
+                        }
+                    })) {
+                    aevrix::g_logger.error("Failed to add TLS listener to event loop");
+                    return 1;
+                }
+            }
+#endif
+
             aevrix::g_logger.info("Starting event loop...");
             while (!aevrix::g_signal_handler.shutdown_requested()) {
                 // Run event loop with 1 second timeout for periodic timeout sweeping

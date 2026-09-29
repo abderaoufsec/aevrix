@@ -472,11 +472,15 @@ void Connection::init_tls(TlsContext& ctx) {
     try {
         tls_connection_ = std::make_unique<TlsConnection>(ctx, fd_);
         tls_enabled_ = true;
-        g_logger.log_with_connection(LogLevel::INFO, id_, "TLS initialized for connection");
+        g_logger.log_with_connection(aevrix::LogLevel::INFO, id_, "TLS initialized for connection");
     } catch (const std::exception& e) {
-        g_logger.log_with_connection(LogLevel::ERR, id_, "Failed to initialize TLS: " + std::string(e.what()));
+        g_logger.log_with_connection(aevrix::LogLevel::ERR, id_, "Failed to initialize TLS: " + std::string(e.what()));
         throw;
     }
+}
+
+bool Connection::is_handshake_complete() const {
+    return tls_connection_ && tls_connection_->is_handshake_complete();
 }
 #endif
 

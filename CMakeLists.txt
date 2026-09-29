@@ -39,14 +39,15 @@ find_package(Threads REQUIRED)
 option(ENABLE_TLS "Enable TLS support" ON)
 
 if(ENABLE_TLS)
-    find_package(OpenSSL REQUIRED)
+    find_package(OpenSSL)
     if(OPENSSL_FOUND)
         message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
         message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
         message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
     else()
-        message(FATAL_ERROR "TLS support requested but OpenSSL not found. "
-                           "Install OpenSSL development packages (e.g., libssl-dev on Debian/Kali)")
+        message(WARNING "TLS support requested but OpenSSL not found. "
+                   "TLS will be disabled. Install OpenSSL development packages (e.g., libssl-dev on Debian/Kali) to enable TLS.")
+        set(ENABLE_TLS OFF)
     endif()
 else()
     message(STATUS "TLS support disabled")
@@ -215,9 +216,15 @@ add_executable(aevrix
     src/observability.cpp
     src/worker_completion_handler.cpp
     src/filesystem_worker.cpp
-    src/tls_context.cpp
-    src/tls_connection.cpp
 )
+
+# Add TLS sources only if TLS is enabled
+if(ENABLE_TLS AND OPENSSL_FOUND)
+    target_sources(aevrix PRIVATE
+        src/tls_context.cpp
+        src/tls_connection.cpp
+    )
+endif()
 
 # Threading support for worker pool
 target_link_libraries(aevrix PRIVATE Threads::Threads)

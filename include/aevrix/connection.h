@@ -606,6 +606,16 @@ public:
         return state_ == ConnectionState::Writing || state_ == ConnectionState::Waiting;
     }
 
+    /**
+     * @brief Check if the connection should be closed
+     */
+    bool should_close() const {
+        return state_ == ConnectionState::Closing ||
+               state_ == ConnectionState::Closed ||
+               timeout_state_ != TimeoutState::None ||
+               !keep_alive_;
+    }
+
     // =========================================================================
     // TLS Support (Phase 21)
     // =========================================================================
@@ -640,19 +650,14 @@ public:
      * @throws std::runtime_error if TLS initialization fails
      */
     void init_tls(TlsContext& ctx);
-#endif
-
-private:
 
     /**
-     * @brief Check if the connection should be closed
+     * @brief Check if TLS handshake is complete
+     *
+     * @return true if handshake is complete, false otherwise
      */
-    bool should_close() const {
-        return state_ == ConnectionState::Closing || 
-               state_ == ConnectionState::Closed ||
-               timeout_state_ != TimeoutState::None ||
-               !keep_alive_;
-    }
+    bool is_handshake_complete() const;
+#endif
 
 private:
     // =========================================================================
