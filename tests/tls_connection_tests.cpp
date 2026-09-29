@@ -2,14 +2,8 @@
 // Aevrix - TLS Connection Unit Tests (Phase 21)
 // =============================================================================
 
-#ifdef AEVRIX_ENABLE_TLS
-
-#include <gtest/gtest.h>
-#include "aevrix/tls_connection.h"
-#include "aevrix/tls_context.h"
-#include "aevrix/logger.h"
-#include <cassert>
 #include <iostream>
+#include <cassert>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -19,6 +13,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 #endif
+
+#ifdef AEVRIX_ENABLE_TLS
+
+#include <gtest/gtest.h>
+#include "aevrix/tls_connection.h"
+#include "aevrix/tls_context.h"
+#include "aevrix/logger.h"
 
 namespace aevrix {
 namespace test {
@@ -206,6 +207,8 @@ TEST(TlsConnectionTest, Shutdown) {
 } // namespace aevrix
 
 #else
+
+#include <iostream>
 
 int main() {
     std::cout << "TLS tests skipped (TLS not enabled in build)" << std::endl;

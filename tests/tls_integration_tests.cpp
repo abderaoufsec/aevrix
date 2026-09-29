@@ -361,4 +361,13 @@ TEST(TlsIntegrationTest, SecurityOldProtocolsDisabled) {
 } // namespace test
 } // namespace aevrix
 
-#endif // Aevrix_TLS_ENABLED
+#else
+
+#include <iostream>
+
+int main() {
+    std::cout << "TLS tests skipped (TLS not enabled in build)" << std::endl;
+    return 0;
+}
+
+#endif // AEVRIX_ENABLE_TLS

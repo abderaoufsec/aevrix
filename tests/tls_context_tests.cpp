@@ -2,15 +2,16 @@
 // Aevrix - TLS Context Unit Tests (Phase 21)
 // =============================================================================
 
+#include <iostream>
+#include <fstream>
+#include <cstdio>
+
 #ifdef AEVRIX_ENABLE_TLS
 
 #include <gtest/gtest.h>
 #include "aevrix/tls_context.h"
 #include "aevrix/logger.h"
 #include <cassert>
-#include <iostream>
-#include <fstream>
-#include <cstdio>
 
 namespace aevrix {
 namespace test {
@@ -145,6 +146,8 @@ TEST(TlsContextTest, MoveSemantics) {
 } // namespace aevrix
 
 #else
+
+#include <iostream>
 
 int main() {
     std::cout << "TLS tests skipped (TLS not enabled in build)" << std::endl;
