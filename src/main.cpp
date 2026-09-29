@@ -1205,7 +1205,7 @@ int main(int argc, char* argv[]) {
             if (!event_loop.add_fd(listener.get_socket(), EPOLLIN,
                 [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count
 #ifdef AEVRIX_ENABLE_TLS
-                 , tls_context.get()
+                 , &tls_context
 #endif
                 ]([[maybe_unused]] int fd, aevrix::EventType event) {
                     if (event == aevrix::EventType::Readable) {
@@ -1220,7 +1220,7 @@ int main(int argc, char* argv[]) {
                                 event_loop.add_fd(client_fd_value, EPOLLIN,
                                     [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config
 #ifdef AEVRIX_ENABLE_TLS
-                                     , tls_context.get()
+                                     , &tls_context
 #endif
                                     ]([[maybe_unused]] int, aevrix::EventType client_event) {
                                         auto conn_ptr = connection_manager.get_connection(client_fd_value);
@@ -1311,7 +1311,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (!event_loop.add_fd(tls_listener->get_socket(), EPOLLIN,
-                    [&tls_listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count, tls_context.get()]([[maybe_unused]] int fd, aevrix::EventType event) {
+                    [&tls_listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count, &tls_context]([[maybe_unused]] int fd, aevrix::EventType event) {
                         if (event == aevrix::EventType::Readable) {
                             // Accept new TLS connection
                             auto client_fd = tls_listener->accept();
@@ -1334,7 +1334,7 @@ int main(int argc, char* argv[]) {
                                     // Add connection to event loop for EPOLLIN (TLS handshake starts with read)
                                     int client_fd_value = client_fd.value();
                                     event_loop.add_fd(client_fd_value, EPOLLIN,
-                                        [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, tls_context.get()]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                        [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &tls_context]([[maybe_unused]] int, aevrix::EventType client_event) {
                                             auto conn_ptr = connection_manager.get_connection(client_fd_value);
                                             if (!conn_ptr) {
                                                 // Connection already removed, clean up event loop
