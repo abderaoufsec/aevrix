@@ -8,9 +8,13 @@ Aevrix is a Linux-first HTTP/1.1 server designed around explicit ownership, non-
 
 ## Status
 
-**Status:** Design document — implementation not started
+**Status:** Implementation in progress — Stages 1–7 and Phase 21 (TLS) complete
 
-Aevrix is currently in the planning phase. See the [implementation roadmap](docs/IMPLEMENTATION_ROADMAP.md) for detailed phase information.
+Aevrix has completed:
+- Stages 1–7: Nonblocking event-driven foundation, HTTP parser, response state machine, WorkerPool, timeout enforcement, static-file security
+- Phase 21: TLS/HTTPS support with OpenSSL
+
+See the [implementation roadmap](docs/IMPLEMENTATION_ROADMAP.md) for detailed phase information.
 
 ## Architecture
 
@@ -94,7 +98,6 @@ Aevrix is currently in the planning phase. See the [implementation roadmap](docs
 - Routing with parameters
 - Reverse proxy
 - Gzip/brotli compression
-- TLS support
 - WebSocket upgrade
 - HTTP range and conditional requests
 
@@ -135,6 +138,42 @@ cmake --build --preset release
 # Run tests
 ctest --preset debug
 ```
+
+### TLS/HTTPS Support
+
+Aevrix supports TLS/HTTPS using OpenSSL. To enable TLS:
+
+**On Debian/Kali:**
+```bash
+sudo apt install libssl-dev
+cmake -S . -B build -DENABLE_TLS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+**Configuration:**
+Add TLS settings to your configuration file:
+```
+tls_enabled = true
+tls_cert_path = /path/to/cert.pem
+tls_key_path = /path/to/key.pem
+tls_min_version = TLSv1.2
+tls_max_version = TLSv1.3
+tls_port = 8443
+tls_handshake_timeout = 10
+```
+
+**Generating a self-signed certificate for testing:**
+```bash
+openssl genrsa -out key.pem 2048
+openssl req -new -x509 -key key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+```
+
+**Testing with curl:**
+```bash
+curl -k https://localhost:8443/
+```
+
+The `-k` flag bypasses certificate verification for self-signed certificates.
 
 ## Testing
 

@@ -361,6 +361,11 @@ if(WIN32)
     target_link_libraries(aevrix_path_security_tests PRIVATE ws2_32)
     # aevrix_http_incremental_parser_tests doesn't need ws2_32 (uses simulated buffers)
     # target_link_libraries(aevrix_http_incremental_parser_tests PRIVATE ws2_32)
+    if(ENABLE_TLS AND OPENSSL_FOUND)
+        target_link_libraries(aevrix_tls_context_tests PRIVATE ws2_32)
+        target_link_libraries(aevrix_tls_connection_tests PRIVATE ws2_32)
+        target_link_libraries(aevrix_tls_integration_tests PRIVATE ws2_32)
+    endif()
 endif()
 
 # Register HTTP response tests
@@ -393,11 +398,40 @@ if(UNIX)
     add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
 endif()
 
+# Register TLS tests (Phase 21)
+if(ENABLE_TLS AND OPENSSL_FOUND)
+    add_executable(aevrix_tls_context_tests
+        tests/tls_context_tests.cpp
+        src/tls_context.cpp
+        src/logger.cpp
+    )
+    target_include_directories(aevrix_tls_context_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_link_libraries(aevrix_tls_context_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME aevrix_tls_context_tests COMMAND aevrix_tls_context_tests)
+
+    add_executable(aevrix_tls_connection_tests
+        tests/tls_connection_tests.cpp
+        src/tls_connection.cpp
+        src/tls_context.cpp
+        src/logger.cpp
+    )
+    target_include_directories(aevrix_tls_connection_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_link_libraries(aevrix_tls_connection_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME aevrix_tls_connection_tests COMMAND aevrix_tls_connection_tests)
+
+    add_executable(aevrix_tls_integration_tests
+        tests/tls_integration_tests.cpp
+        src/tls_context.cpp
+        src/tls_connection.cpp
+        src/logger.cpp
+    )
+    target_include_directories(aevrix_tls_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_link_libraries(aevrix_tls_integration_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME aevrix_tls_integration_tests COMMAND aevrix_tls_integration_tests)
+endif()
+
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
-
-# Register path security tests (enabled in Phase 16 - temporarily disabled)
-# add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
 
 # =============================================================================
 # Benchmark Targets (Phase 18)
