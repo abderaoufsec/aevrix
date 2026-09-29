@@ -31,6 +31,28 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 
 # =============================================================================
+# OpenSSL Support (Phase 21 - TLS)
+# =============================================================================
+# OpenSSL is required for TLS support. If TLS is enabled, OpenSSL must be found.
+# The project can still build without TLS if OpenSSL is not available.
+# =============================================================================
+option(ENABLE_TLS "Enable TLS support" ON)
+
+if(ENABLE_TLS)
+    find_package(OpenSSL REQUIRED)
+    if(OPENSSL_FOUND)
+        message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
+        message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
+        message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
+    else()
+        message(FATAL_ERROR "TLS support requested but OpenSSL not found. "
+                           "Install OpenSSL development packages (e.g., libssl-dev on Debian/Kali)")
+    endif()
+else()
+    message(STATUS "TLS support disabled")
+endif()
+
+# =============================================================================
 # Compiler Warning Configuration
 # =============================================================================
 # Enable strict compiler warnings and treat them as errors to enforce code quality
@@ -193,10 +215,19 @@ add_executable(aevrix
     src/observability.cpp
     src/worker_completion_handler.cpp
     src/filesystem_worker.cpp
+    src/tls_context.cpp
+    src/tls_connection.cpp
 )
 
 # Threading support for worker pool
 target_link_libraries(aevrix PRIVATE Threads::Threads)
+
+# Link OpenSSL if TLS is enabled
+if(ENABLE_TLS AND OPENSSL_FOUND)
+    target_link_libraries(aevrix PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_include_directories(aevrix PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_compile_definitions(aevrix PRIVATE AEVRIX_ENABLE_TLS)
+endif()
 
 # Ensure main executable can find aevrix headers
 target_include_directories(aevrix PRIVATE ${PROJECT_SOURCE_DIR}/include)

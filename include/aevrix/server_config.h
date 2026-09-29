@@ -324,6 +324,94 @@ public:
      */
     void set_document_root(const std::string& document_root) { document_root_ = document_root; }
 
+    // =========================================================================
+    // TLS Configuration (Phase 21)
+    // =========================================================================
+
+    /**
+     * @brief Check if TLS is enabled
+     * 
+     * @return true if TLS is enabled, false otherwise
+     */
+    bool tls_enabled() const { return tls_enabled_; }
+
+    /**
+     * @brief Set whether TLS is enabled
+     * 
+     * @param enabled true to enable TLS, false to disable
+     */
+    void set_tls_enabled(bool enabled) { tls_enabled_ = enabled; }
+
+    /**
+     * @brief Get the TLS certificate file path
+     * 
+     * @return const std::string& The certificate file path
+     */
+    const std::string& tls_cert_file() const { return tls_cert_file_; }
+
+    /**
+     * @brief Set the TLS certificate file path
+     * 
+     * @param cert_file The certificate file path
+     */
+    void set_tls_cert_file(const std::string& cert_file) { tls_cert_file_ = cert_file; }
+
+    /**
+     * @brief Get the TLS private key file path
+     * 
+     * @return const std::string& The private key file path
+     */
+    const std::string& tls_key_file() const { return tls_key_file_; }
+
+    /**
+     * @brief Set the TLS private key file path
+     * 
+     * @param key_file The private key file path
+     */
+    void set_tls_key_file(const std::string& key_file) { tls_key_file_ = key_file; }
+
+    /**
+     * @brief Get the minimum TLS version
+     * 
+     * @return const std::string& The minimum TLS version (e.g., "TLSv1.2")
+     */
+    const std::string& tls_min_version() const { return tls_min_version_; }
+
+    /**
+     * @brief Set the minimum TLS version
+     * 
+     * @param min_version The minimum TLS version
+     */
+    void set_tls_min_version(const std::string& min_version) { tls_min_version_ = min_version; }
+
+    /**
+     * @brief Get the maximum TLS version
+     * 
+     * @return const std::string& The maximum TLS version (e.g., "TLSv1.3")
+     */
+    const std::string& tls_max_version() const { return tls_max_version_; }
+
+    /**
+     * @brief Set the maximum TLS version
+     * 
+     * @param max_version The maximum TLS version
+     */
+    void set_tls_max_version(const std::string& max_version) { tls_max_version_ = max_version; }
+
+    /**
+     * @brief Get the TLS listen port
+     * 
+     * @return uint16_t The TLS listen port
+     */
+    uint16_t tls_port() const { return tls_port_; }
+
+    /**
+     * @brief Set the TLS listen port
+     * 
+     * @param port The TLS listen port
+     */
+    void set_tls_port(uint16_t port) { tls_port_ = port; }
+
 private:
     // =========================================================================
     // Timeout Configuration (milliseconds)
@@ -350,6 +438,17 @@ private:
     uint16_t port_;                    // Server binding port
     uint32_t workers_;                 // Number of worker threads
     std::string document_root_;        // Static file serving directory
+
+    // =========================================================================
+    // TLS Configuration (Phase 21)
+    // =========================================================================
+
+    bool tls_enabled_ = false;         // Whether TLS is enabled
+    std::string tls_cert_file_;        // TLS certificate file path
+    std::string tls_key_file_;         // TLS private key file path
+    std::string tls_min_version_;      // Minimum TLS version (e.g., "TLSv1.2")
+    std::string tls_max_version_;      // Maximum TLS version (e.g., "TLSv1.3")
+    uint16_t tls_port_ = 443;          // TLS listen port (default 443)
 };
 
 } // namespace aevrix

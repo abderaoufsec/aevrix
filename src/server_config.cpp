@@ -53,7 +53,7 @@ ServerConfig::ServerConfig(
 
 std::string ServerConfig::summary() const {
     std::ostringstream oss;
-    
+
     oss << "Server Configuration:\n";
     oss << "  Host: " << host_ << "\n";
     oss << "  Port: " << port_ << "\n";
@@ -68,7 +68,22 @@ std::string ServerConfig::summary() const {
         << (max_buffer_size_ / 1024) << " KB)\n";
     oss << "  Max request body: " << max_request_body_ << " bytes ("
         << (max_request_body_ / 1024 / 1024) << " MB)\n";
-    
+
+#ifdef AEVRIX_ENABLE_TLS
+    oss << "  TLS enabled: " << (tls_enabled_ ? "yes" : "no") << "\n";
+    if (tls_enabled_) {
+        oss << "  TLS certificate: " << tls_cert_file_ << "\n";
+        oss << "  TLS private key: " << tls_key_file_ << "\n";
+        if (!tls_min_version_.empty()) {
+            oss << "  TLS min version: " << tls_min_version_ << "\n";
+        }
+        if (!tls_max_version_.empty()) {
+            oss << "  TLS max version: " << tls_max_version_ << "\n";
+        }
+        oss << "  TLS port: " << tls_port_ << "\n";
+    }
+#endif
+
     return oss.str();
 }
 
@@ -95,7 +110,30 @@ void ServerConfig::load_from_parser(const ConfigParser& parser) {
     max_connections_ = static_cast<uint32_t>(parser.get_int("max_connections", static_cast<int64_t>(max_connections_)));
     max_buffer_size_ = static_cast<uint32_t>(parser.get_int("max_buffer_size", static_cast<int64_t>(max_buffer_size_)));
     max_request_body_ = static_cast<uint32_t>(parser.get_int("max_request_body", static_cast<int64_t>(max_request_body_)));
-    
+
+#ifdef AEVRIX_ENABLE_TLS
+    // Load TLS configuration
+    tls_enabled_ = parser.get_bool("tls_enabled", tls_enabled_);
+    tls_cert_file_ = parser.get_string("tls_cert_file", tls_cert_file_);
+    tls_key_file_ = parser.get_string("tls_key_file", tls_key_file_);
+    tls_min_version_ = parser.get_string("tls_min_version", tls_min_version_);
+    tls_max_version_ = parser.get_string("tls_max_version", tls_max_version_);
+    tls_port_ = static_cast<uint16_t>(parser.get_int("tls_port", static_cast<int64_t>(tls_port_)));
+
+    // Validate TLS configuration if enabled
+    if (tls_enabled_) {
+        if (tls_cert_file_.empty()) {
+            throw std::runtime_error("TLS enabled but tls_cert_file not specified");
+        }
+        if (tls_key_file_.empty()) {
+            throw std::runtime_error("TLS enabled but tls_key_file not specified");
+        }
+        if (tls_port_ == 0) {
+            throw std::runtime_error("Invalid tls_port: must be positive");
+        }
+    }
+#endif
+
     // Validate configuration
     if (port_ == 0) {
         throw std::runtime_error("Invalid port: " + std::to_string(port_));
