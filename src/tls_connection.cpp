@@ -205,13 +205,14 @@ TlsIoRequirement TlsConnection::handle_ssl_error(int ssl_error) {
             g_logger.log_with_connection(aevrix::LogLevel::ERR, static_cast<uint64_t>(fd_), "TLS I/O error");
             return TlsIoRequirement::Closed;
 
-        case SSL_ERROR_SSL:
+        case SSL_ERROR_SSL: {
             // TLS protocol error
             unsigned long err = ERR_get_error();
             char err_msg[256];
             ERR_error_string_n(err, err_msg, sizeof(err_msg));
             g_logger.log_with_connection(aevrix::LogLevel::ERR, static_cast<uint64_t>(fd_), "TLS protocol error: " + std::string(err_msg));
             return TlsIoRequirement::Closed;
+        }
 
         default:
             g_logger.log_with_connection(aevrix::LogLevel::ERR, static_cast<uint64_t>(fd_), "Unknown TLS error: " + std::to_string(ssl_error));
