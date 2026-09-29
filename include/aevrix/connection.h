@@ -48,6 +48,11 @@
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
 
+#ifdef AEVRIX_ENABLE_TLS
+#include "aevrix/tls_connection.h"
+#include "aevrix/tls_context.h"
+#endif
+
 // Forward declaration for ServerConfig
 namespace aevrix {
 class ServerConfig;
@@ -63,11 +68,12 @@ using http::StatusCode;
 
 /**
  * @brief Overall connection lifecycle state
- * 
+ *
  * Tracks the high-level state of a connection through its lifecycle.
  */
 enum class ConnectionState {
     New,           // Connection just accepted, not yet initialized
+    TlsHandshake,  // TLS handshake in progress (Phase 21)
     Reading,       // Actively reading data from the client
     Writing,       // Actively writing data to the client
     Waiting,       // Waiting for next event (idle state in keep-alive)
@@ -600,6 +606,44 @@ public:
         return state_ == ConnectionState::Writing || state_ == ConnectionState::Waiting;
     }
 
+    // =========================================================================
+    // TLS Support (Phase 21)
+    // =========================================================================
+
+#ifdef AEVRIX_ENABLE_TLS
+    /**
+     * @brief Check if TLS is enabled for this connection
+     */
+    bool is_tls_enabled() const { return tls_enabled_; }
+
+    /**
+     * @brief Set whether TLS is enabled for this connection
+     */
+    void set_tls_enabled(bool enabled) { tls_enabled_ = enabled; }
+
+    /**
+     * @brief Get the TLS connection object
+     */
+    std::unique_ptr<TlsConnection>& tls_connection() { return tls_connection_; }
+
+    /**
+     * @brief Get the TLS connection object (const)
+     */
+    const std::unique_ptr<TlsConnection>& tls_connection() const { return tls_connection_; }
+
+    /**
+     * @brief Initialize TLS for this connection
+     *
+     * Creates a TlsConnection object from the given TLS context.
+     *
+     * @param ctx The TLS context
+     * @throws std::runtime_error if TLS initialization fails
+     */
+    void init_tls(TlsContext& ctx);
+#endif
+
+private:
+
     /**
      * @brief Check if the connection should be closed
      */
@@ -662,6 +706,15 @@ private:
 
     std::chrono::steady_clock::time_point deadline_;  // Current deadline for timeout
     bool worker_active_ = false;  // Whether a worker task is active (Stage 6)
+
+    // =========================================================================
+    // TLS State (Phase 21)
+    // =========================================================================
+
+#ifdef AEVRIX_ENABLE_TLS
+    bool tls_enabled_ = false;  // Whether TLS is enabled for this connection
+    std::unique_ptr<TlsConnection> tls_connection_;  // Per-connection TLS state
+#endif
 };
 
 } // namespace aevrix

@@ -11,6 +11,9 @@
 #include "aevrix/http_response.h"
 #include "aevrix/server_config.h"
 #include "aevrix/logger.h"
+#ifdef AEVRIX_ENABLE_TLS
+#include "aevrix/tls_context.h"
+#endif
 #include <iostream>
 #include <algorithm>
 #include <cstring>
@@ -97,30 +100,55 @@ Connection::IoResult Connection::read_nonblocking() {
     constexpr size_t BUFFER_SIZE = 8192;
     char buffer[BUFFER_SIZE];
 
+#ifdef AEVRIX_ENABLE_TLS
+    // Phase 21: Use SSL_read() if TLS is enabled
+    if (tls_enabled_ && tls_connection_) {
+        size_t bytes_read = 0;
+        TlsIoRequirement io_req = tls_connection_->read(buffer, BUFFER_SIZE, bytes_read);
+
+        if (io_req == TlsIoRequirement::Closed) {
+            return IoResult::Closed;
+        }
+
+        if (io_req == TlsIoRequirement::WantRead || io_req == TlsIoRequirement::WantWrite) {
+            // TLS needs more I/O, wait for event loop
+            return IoResult::InProgress;
+        }
+
+        if (bytes_read > 0) {
+            // Append to input buffer
+            input_buffer_.insert(input_buffer_.end(), buffer, buffer + bytes_read);
+            return IoResult::Success;
+        }
+
+        return IoResult::InProgress;
+    }
+#endif
+
 #ifdef _WIN32
     SOCKET sock = static_cast<SOCKET>(fd_);
     int received = recv(sock, buffer, static_cast<int>(BUFFER_SIZE), 0);
 
     if (received == SOCKET_ERROR) {
         int error = WSAGetLastError();
-        
+
         // Handle nonblocking mode: WSAEWOULDBLOCK means no data available yet
         if (error == WSAEWOULDBLOCK) {
             // Not an error - just no data available right now
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "read_nonblocking: no data available (WSAEWOULDBLOCK)");
             return IoResult::InProgress;
         }
-        
+
         // Handle interrupted system call - retry
         if (error == WSAEINTR) {
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "read_nonblocking: interrupted (WSAEINTR), will retry");
             return IoResult::InProgress;
         }
-        
+
         // Real error
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_, 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_,
                                              "read_nonblocking failed: " + std::to_string(error));
         return IoResult::Error;
     }
@@ -195,31 +223,71 @@ Connection::IoResult Connection::write_nonblocking() {
         return IoResult::Success;
     }
 
+#ifdef AEVRIX_ENABLE_TLS
+    // Phase 21: Use SSL_write() if TLS is enabled
+    if (tls_enabled_ && tls_connection_) {
+        size_t bytes_written = 0;
+        TlsIoRequirement io_req = tls_connection_->write(
+            output_buffer_.data() + write_offset_, remaining, bytes_written);
+
+        if (io_req == TlsIoRequirement::Closed) {
+            return IoResult::Error;
+        }
+
+        if (io_req == TlsIoRequirement::WantRead || io_req == TlsIoRequirement::WantWrite) {
+            // TLS needs more I/O, wait for event loop
+            return IoResult::InProgress;
+        }
+
+        if (bytes_written > 0) {
+            // Update write offset
+            write_offset_ += bytes_written;
+
+            if (write_offset_ >= output_buffer_.size()) {
+                // Full write - clear buffer and reset offset
+                output_buffer_.clear();
+                write_offset_ = 0;
+            }
+
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
+                                                 "write_nonblocking (TLS): sent " + std::to_string(bytes_written) + " bytes, " +
+                                                 std::to_string(output_buffer_.size() - write_offset_) + " bytes remaining");
+
+            // Update activity timestamp
+            update_activity();
+
+            return IoResult::Success;
+        }
+
+        return IoResult::InProgress;
+    }
+#endif
+
 #ifdef _WIN32
     SOCKET sock = static_cast<SOCKET>(fd_);
-    int sent = send(sock, output_buffer_.data() + write_offset_, 
+    int sent = send(sock, output_buffer_.data() + write_offset_,
                     static_cast<int>(remaining), 0);
 
     if (sent == SOCKET_ERROR) {
         int error = WSAGetLastError();
-        
+
         // Handle nonblocking mode: WSAEWOULDBLOCK means send buffer full
         if (error == WSAEWOULDBLOCK) {
             // Not an error - just can't write right now
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "write_nonblocking: send buffer full (WSAEWOULDBLOCK)");
             return IoResult::InProgress;
         }
-        
+
         // Handle interrupted system call - retry
         if (error == WSAEINTR) {
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "write_nonblocking: interrupted (WSAEINTR), will retry");
             return IoResult::InProgress;
         }
-        
+
         // Real error
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_, 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_,
                                              "write_nonblocking failed: " + std::to_string(error));
         return IoResult::Error;
     }
@@ -228,24 +296,24 @@ Connection::IoResult Connection::write_nonblocking() {
 
     if (sent < 0) {
         int error = errno;
-        
+
         // Handle nonblocking mode: EAGAIN/EWOULDBLOCK means send buffer full
         if (error == EAGAIN || error == EWOULDBLOCK) {
             // Not an error - just can't write right now
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "write_nonblocking: send buffer full (EAGAIN/EWOULDBLOCK)");
             return IoResult::InProgress;
         }
-        
+
         // Handle interrupted system call - retry
         if (error == EINTR) {
-            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
                                                  "write_nonblocking: interrupted (EINTR), will retry");
             return IoResult::InProgress;
         }
-        
+
         // Real error
-        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_, 
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::ERR, id_,
                                              "write_nonblocking failed: " + std::string(strerror(error)));
         return IoResult::Error;
     }
@@ -254,20 +322,20 @@ Connection::IoResult Connection::write_nonblocking() {
     // Update write offset (Stage 4 - more efficient than shifting)
     size_t sent_size = static_cast<size_t>(sent);
     write_offset_ += sent_size;
-    
+
     if (write_offset_ >= output_buffer_.size()) {
         // Full write - clear buffer and reset offset
         output_buffer_.clear();
         write_offset_ = 0;
     }
-    
-    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_, 
-                                         "write_nonblocking: sent " + std::to_string(sent) + " bytes, " + 
+
+    aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, id_,
+                                         "write_nonblocking: sent " + std::to_string(sent) + " bytes, " +
                                          std::to_string(output_buffer_.size() - write_offset_) + " bytes remaining");
-    
+
     // Update activity timestamp
     update_activity();
-    
+
     return IoResult::Success;
 }
 
@@ -354,6 +422,12 @@ void Connection::set_deadline(const ServerConfig& config) {
     uint64_t timeout_ms = 0;
 
     // Determine timeout based on current state
+#ifdef AEVRIX_ENABLE_TLS
+    // Phase 21: TLS handshake gets header timeout
+    if (state_ == ConnectionState::TlsHandshake) {
+        timeout_ms = config.header_timeout_ms();
+    } else
+#endif
     if (read_state_ == ReadState::Headers) {
         timeout_ms = config.header_timeout_ms();
     } else if (read_state_ == ReadState::Body) {
@@ -388,5 +462,22 @@ bool Connection::has_deadline_exceeded() const {
 
     return false;
 }
+
+// =============================================================================
+// TLS Support (Phase 21)
+// =============================================================================
+
+#ifdef AEVRIX_ENABLE_TLS
+void Connection::init_tls(TlsContext& ctx) {
+    try {
+        tls_connection_ = std::make_unique<TlsConnection>(ctx, fd_);
+        tls_enabled_ = true;
+        g_logger.log_with_connection(LogLevel::INFO, id_, "TLS initialized for connection");
+    } catch (const std::exception& e) {
+        g_logger.log_with_connection(LogLevel::ERR, id_, "Failed to initialize TLS: " + std::string(e.what()));
+        throw;
+    }
+}
+#endif
 
 } // namespace aevrix
