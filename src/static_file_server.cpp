@@ -56,32 +56,40 @@ StaticFileServer::StaticFileServer(const std::string& document_root)
 
 std::tuple<std::string, std::string, int> StaticFileServer::serve_file(
     const std::string& request_target) {
-    
+
     // Normalize the request target path
-    std::string normalized = normalize_path(request_target);
-    
+    // Catch security validation rejections and return appropriate HTTP status codes
+    std::string normalized;
+    try {
+        normalized = normalize_path(request_target);
+    } catch (const std::runtime_error& e) {
+        // Security validation failed (e.g., absolute path, double-encoded path)
+        std::cerr << "Path validation failed: " << e.what() << "\n";
+        return {"", "text/plain", 400};  // Bad Request
+    }
+
     // Resolve to absolute path
     std::filesystem::path resolved_path = resolve_path(normalized);
-    
+
     // Validate that the path stays within document root
     if (!validate_path(resolved_path)) {
-        std::cerr << "Path validation failed: " << resolved_path.string() 
+        std::cerr << "Path validation failed: " << resolved_path.string()
                   << " escapes document root\n";
         return {"", "text/plain", 403};  // Forbidden
     }
-    
+
     // Check if path exists
     if (!std::filesystem::exists(resolved_path)) {
         std::cerr << "File not found: " << resolved_path.string() << "\n";
         return {"", "text/plain", 404};  // Not Found
     }
-    
+
     // Check if path is a directory
     if (is_directory(resolved_path)) {
         std::cerr << "Attempted to access directory: " << resolved_path.string() << "\n";
         return {"", "text/plain", 403};  // Forbidden (no directory listing in Phase 6)
     }
-    
+
     // Check if path is a regular file
     if (!std::filesystem::is_regular_file(resolved_path)) {
         std::cerr << "Not a regular file: " << resolved_path.string() << "\n";
@@ -135,7 +143,7 @@ std::string StaticFileServer::normalize_path(const std::string& path) const {
         throw std::runtime_error("Path normalization failed");
     }
 
-    // Remove leading slash if present (filesystem paths don't start with /)
+    // Remove leading slash if present (HTTP URIs start with /, but filesystem paths don't)
     std::string normalized = decoded;
     if (!normalized.empty() && normalized[0] == '/') {
         normalized = normalized.substr(1);
