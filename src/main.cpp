@@ -220,7 +220,7 @@ bool send_response(int client_fd, const char* data, size_t length) {
 void send_error_response(int client_fd, StatusCode status, const std::string& message) {
     HttpResponse error_response(status, message);
     error_response.set_header("Content-Type", "text/plain");
-    error_response.set_header("Server", "Aevrix/0.1.0");
+    error_response.set_header("Server", "Aevrix/1.0.0");
     error_response.set_connection_policy(ConnectionPolicy::Close);
     
     std::string serialized = HttpResponseSerializer::serialize(error_response);
@@ -512,7 +512,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
             if (request.method() == HttpMethod::GET) {
                 HttpResponse response(StatusCode::OK, content);
                 response.set_header("Content-Type", mime_type);
-                response.set_header("Server", "Aevrix/0.1.0");
+                response.set_header("Server", "Aevrix/1.0.0");
                 response.set_connection_policy(keep_alive ? ConnectionPolicy::KeepAlive : ConnectionPolicy::Close);
                 return response;
             } else {
@@ -520,7 +520,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
                 HttpResponse response(StatusCode::OK);
                 response.set_header("Content-Type", mime_type);
                 response.set_header("Content-Length", std::to_string(content.length()));
-                response.set_header("Server", "Aevrix/0.1.0");
+                response.set_header("Server", "Aevrix/1.0.0");
                 response.set_connection_policy(keep_alive ? ConnectionPolicy::KeepAlive : ConnectionPolicy::Close);
                 return response;
             }
@@ -528,21 +528,21 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
             // File not found
             HttpResponse response(StatusCode::NotFound, "Not Found");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         } else if (status_code == 403) {
             // Forbidden (directory access or path traversal attempt)
             HttpResponse response(StatusCode::Forbidden, "Forbidden");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         } else {
             // Internal server error
             HttpResponse response(StatusCode::InternalServerError, "Internal Server Error");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
             return response;
         }
@@ -551,7 +551,7 @@ aevrix::HttpResponse build_response(const HttpRequest& request, aevrix::StaticFi
         HttpResponse response(StatusCode::MethodNotAllowed, 
                                "Method not allowed: " + aevrix::http::http_method_to_string(request.method()));
         response.set_header("Content-Type", "text/plain");
-        response.set_header("Server", "Aevrix/0.1.0");
+        response.set_header("Server", "Aevrix/1.0.0");
         response.set_header("Allow", "GET, HEAD");  // Indicate allowed methods
         response.set_connection_policy(ConnectionPolicy::Close);  // Always close on error
         return response;
@@ -584,7 +584,7 @@ aevrix::http::HttpResponse generate_response(const aevrix::http::HttpRequest& re
         aevrix::http::HttpResponse response(aevrix::http::StatusCode::InternalServerError, 
                                "Internal Server Error");
         response.set_header("Content-Type", "text/plain");
-        response.set_header("Server", "Aevrix/0.1.0");
+        response.set_header("Server", "Aevrix/1.0.0");
         response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
         return response;
     }
@@ -636,7 +636,7 @@ HttpResponse build_proxy_response(const aevrix::ProxyOutcome& outcome, bool clie
             }
         }
 
-        result.set_header("Server", "Aevrix/0.1.0");
+        result.set_header("Server", "Aevrix/1.0.0");
         result.set_header("Via", "1.1 aevrix");
         result.set_connection_policy(client_keep_alive ? ConnectionPolicy::KeepAlive
                                                       : ConnectionPolicy::Close);
@@ -675,7 +675,7 @@ HttpResponse build_proxy_response(const aevrix::ProxyOutcome& outcome, bool clie
 
     HttpResponse response(status, message + "\n");
     response.set_header("Content-Type", "text/plain");
-    response.set_header("Server", "Aevrix/0.1.0");
+    response.set_header("Server", "Aevrix/1.0.0");
     response.set_header("Via", "1.1 aevrix");
     // An error reply to HEAD keeps the Content-Length metadata but must not
     // push body bytes onto a connection that will never read them.
@@ -1061,7 +1061,7 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
             aevrix::http::HttpResponse response(aevrix::http::StatusCode::ServiceUnavailable,
                                    "Service Unavailable: Worker pool overloaded");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
 
             aevrix::http::HttpResponseSerializer serializer;
@@ -1469,9 +1469,9 @@ int main(int argc, char* argv[]) {
         // Register GET / route (root endpoint)
         router.add_route("GET", "/", [](const HttpRequest& request) {
             (void)request;  // Root endpoint doesn't need request details
-            HttpResponse response(StatusCode::OK, "Aevrix HTTP Server v0.1.0\n");
+            HttpResponse response(StatusCode::OK, "Aevrix HTTP Server v1.0.0\n");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::KeepAlive);
             return response;
         });
@@ -1481,7 +1481,7 @@ int main(int argc, char* argv[]) {
             (void)request;  // Health check doesn't need request details
             HttpResponse response(StatusCode::OK, "OK\n");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::KeepAlive);
             return response;
         });
@@ -1491,7 +1491,7 @@ int main(int argc, char* argv[]) {
             (void)request;  // Metrics endpoint doesn't need request details yet
             HttpResponse response(StatusCode::OK, "Metrics endpoint - not yet implemented\n");
             response.set_header("Content-Type", "text/plain");
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::KeepAlive);
             return response;
         });
@@ -1534,7 +1534,7 @@ int main(int argc, char* argv[]) {
                                     std::to_string(config_store.generation()));
             }
 
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::KeepAlive);
             return response;
         });
@@ -1586,7 +1586,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            response.set_header("Server", "Aevrix/0.1.0");
+            response.set_header("Server", "Aevrix/1.0.0");
             response.set_connection_policy(ConnectionPolicy::KeepAlive);
             return response;
         });
@@ -1731,7 +1731,7 @@ int main(int argc, char* argv[]) {
                                     if (result->status_code == 200) {
                                         response = aevrix::http::HttpResponse(aevrix::http::StatusCode::OK, result->content);
                                         response.set_header("Content-Type", result->mime_type);
-                                        response.set_header("Server", "Aevrix/0.1.0");
+                                        response.set_header("Server", "Aevrix/1.0.0");
                                         response.set_connection_policy(conn->keep_alive() ? 
                                             aevrix::http::ConnectionPolicy::KeepAlive : 
                                             aevrix::http::ConnectionPolicy::Close);
@@ -1741,7 +1741,7 @@ int main(int argc, char* argv[]) {
                                             static_cast<aevrix::http::StatusCode>(result->status_code), 
                                             result->error_message);
                                         response.set_header("Content-Type", "text/plain");
-                                        response.set_header("Server", "Aevrix/0.1.0");
+                                        response.set_header("Server", "Aevrix/1.0.0");
                                         response.set_connection_policy(aevrix::http::ConnectionPolicy::Close);
                                     }
                                     

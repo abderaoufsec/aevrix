@@ -105,7 +105,7 @@ active_connections: 12
 
 **Implementation**:
 - `handle_server_info_endpoint()` function
-- Returns server version, phase, and current metrics
+- Returns server version and current metrics
 - Useful for debugging and server identification
 
 **Usage**:
@@ -116,8 +116,7 @@ curl http://localhost:8080/server-info
 **Sample Output**:
 ```
 Aevrix HTTP Server
-Version: 0.1.0
-Phase: 20 - Observability
+Version: 1.0.0
 HTTP Version: HTTP/1.1
 C++ Standard: C++20
 

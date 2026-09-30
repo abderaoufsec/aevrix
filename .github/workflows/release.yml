@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Build artifacts and publish GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          openssl version
+
+      - name: Configure (Release, TLS ON)
+        run: cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TLS=ON
+
+      - name: Build (Release)
+        run: cmake --build build/release -j$(nproc)
+
+      - name: Test (Release)
+        run: ctest --test-dir build/release --output-on-failure
+
+      - name: Collect release metadata
+        id: meta
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "compiler=$(g++ --version | head -1)" >> "$GITHUB_OUTPUT"
+          echo "openssl=$(openssl version)" >> "$GITHUB_OUTPUT"
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp build/release/aevrix dist/aevrix-linux-x86_64
+          cp aevrix.conf dist/aevrix.conf.example
+          cat > dist/BUILD-INFO.txt <<EOF
+          version: ${GITHUB_REF_NAME}
+          commit: ${{ steps.meta.outputs.sha }} ($GITHUB_SHA)
+          compiler: ${{ steps.meta.outputs.compiler }}
+          openssl: ${{ steps.meta.outputs.openssl }}
+          build_mode: Release
+          tls: ON
+          platform: ubuntu-latest (x86_64)
+          EOF
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          cat dist/BUILD-INFO.txt dist/SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/aevrix-linux-x86_64
+            dist/aevrix.conf.example
+            dist/BUILD-INFO.txt
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            ## ${{ github.ref_name }}
+
+            - Commit: `${{ steps.meta.outputs.sha }}` (`$GITHUB_SHA`)
+            - Compiler: `${{ steps.meta.outputs.compiler }}`
+            - OpenSSL: `${{ steps.meta.outputs.openssl }}`
+            - Build mode: Release, TLS ON
+            - Platform: ubuntu-latest (x86_64)
+
+            See CHANGELOG.md for breaking changes, new features, and migration notes.
+            Verify artifacts with `sha256sum -c SHA256SUMS.txt`.
+
+            Known limitations are listed in SECURITY.md and docs/TLS.md.

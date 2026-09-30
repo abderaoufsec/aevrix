@@ -426,7 +426,7 @@ http::HttpResponse build_rejection_response(UpgradeVerdict verdict) {
     }
 
     response.set_header("Content-Type", "text/plain");
-    response.set_header("Server", "Aevrix/0.1.0");
+    response.set_header("Server", "Aevrix/1.0.0");
     response.set_connection_policy(http::ConnectionPolicy::Close);
     return response;
 }

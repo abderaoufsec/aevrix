@@ -35,7 +35,7 @@ HttpResponse Router::route(const HttpRequest& request) const {
     // No handler found, return 404
     HttpResponse response(StatusCode::NotFound, "Not Found");
     response.set_header("Content-Type", "text/plain");
-    response.set_header("Server", "Aevrix/0.1.0");
+    response.set_header("Server", "Aevrix/1.0.0");
     response.set_connection_policy(ConnectionPolicy::Close);
     return response;
 }

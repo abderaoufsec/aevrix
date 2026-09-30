@@ -70,8 +70,7 @@ http::HttpResponse handle_server_info_endpoint(const http::HttpRequest& request)
     // Build server info response
     std::stringstream ss;
     ss << "Aevrix HTTP Server\n";
-    ss << "Version: 0.1.0\n";
-    ss << "Phase: 20 - Observability\n";
+    ss << "Version: 1.0.0\n";
     ss << "HTTP Version: HTTP/1.1\n";
     ss << "C++ Standard: C++20\n";
     ss << "\n";

@@ -10,7 +10,7 @@
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.20)
-project(aevrix VERSION 0.1.0 LANGUAGES CXX)
+project(aevrix VERSION 1.0.0 LANGUAGES CXX)
 
 # Include sanitizer configuration module
 # This provides functions to enable AddressSanitizer, UndefinedBehaviorSanitizer, etc.

@@ -10,6 +10,7 @@
 #include "aevrix/upstream_pool.h"
 
 #include <arpa/inet.h>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -61,8 +62,8 @@ size_t count_open_fds() {
  */
 class TestListener {
 public:
-    explicit TestListener(bool hold_connections = true) {
-        hold_connections_ = hold_connections;
+    explicit TestListener(bool hold_connections = true)
+        : hold_connections_(hold_connections) {
         fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         assert(fd_ >= 0);
 
@@ -83,12 +84,12 @@ public:
         assert(::getsockname(fd_, reinterpret_cast<struct sockaddr*>(&address), &length) == 0);
         port_ = ::ntohs(address.sin_port);
 
-        accepting_ = true;
+        accepting_.store(true, std::memory_order_release);
         accept_thread_ = std::thread([this]() { accept_loop(); });
     }
 
     ~TestListener() {
-        accepting_ = false;
+        accepting_.store(false, std::memory_order_release);
         if (accept_thread_.joinable()) {
             accept_thread_.join();
         }
@@ -102,6 +103,7 @@ public:
         }
 
         ::close(fd_);
+        fd_ = -1;
     }
 
     TestListener(const TestListener&) = delete;
@@ -133,7 +135,7 @@ public:
 
 private:
     void accept_loop() {
-        while (accepting_) {
+        while (accepting_.load(std::memory_order_acquire)) {
             struct pollfd descriptor {};
             descriptor.fd = fd_;
             descriptor.events = POLLIN;
@@ -168,8 +170,8 @@ private:
 
     int fd_ = -1;
     uint16_t port_ = 0;
-    bool accepting_ = false;
-    bool hold_connections_ = true;
+    std::atomic<bool> accepting_{false};
+    const bool hold_connections_ = true;
     std::thread accept_thread_;
     mutable std::mutex mutex_;
     size_t accepted_count_ = 0;
