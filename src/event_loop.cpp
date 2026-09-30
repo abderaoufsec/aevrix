@@ -198,6 +198,10 @@ bool EventLoop::remove_fd(int fd) {
 }
 
 bool EventLoop::run(int timeout_ms) {
+    // Perform a single wait-and-dispatch iteration and return true.
+    // Long-running servers call run() repeatedly (see main.cpp) so that
+    // periodic maintenance - such as ConnectionManager::sweep_timeouts() -
+    // executes between iterations. Returning false signals shutdown/error.
     running_ = true;
     
     while (running_) {
@@ -213,8 +217,8 @@ bool EventLoop::run(int timeout_ms) {
                     running_ = false;
                     return false;
                 }
-                aevrix::g_logger.debug("epoll_wait interrupted by signal, continuing");
-                continue;
+                aevrix::g_logger.debug("epoll_wait interrupted by signal, returning to caller");
+                break;
             }
             aevrix::g_logger.error("epoll_wait failed: " + std::string(strerror(errno)));
             return false;
@@ -228,7 +232,9 @@ bool EventLoop::run(int timeout_ms) {
                 return false;
             }
             aevrix::g_logger.debug("epoll_wait timeout");
-            continue;
+            // Return to the caller so it can perform periodic maintenance
+            // (e.g. sweeping timed-out connections).
+            break;
         }
         
         aevrix::g_logger.debug("epoll_wait returned " + std::to_string(nfds) + " events");
@@ -279,6 +285,9 @@ bool EventLoop::run(int timeout_ms) {
             }
         }
         
+        // Exactly one event batch handled - return control to the caller.
+        break;
+        
 #elif defined(AEVRIX_USE_SELECT)
         // Use select for Windows/Unix fallback
         fd_set temp_read_fds = read_fds_;
@@ -303,8 +312,8 @@ bool EventLoop::run(int timeout_ms) {
                     running_ = false;
                     return false;
                 }
-                aevrix::g_logger.debug("select interrupted, continuing");
-                continue;
+                aevrix::g_logger.debug("select interrupted, returning to caller");
+                break;
             }
             aevrix::g_logger.error("select failed: " + std::to_string(error));
 #else
@@ -314,8 +323,8 @@ bool EventLoop::run(int timeout_ms) {
                     running_ = false;
                     return false;
                 }
-                aevrix::g_logger.debug("select interrupted by signal, continuing");
-                continue;
+                aevrix::g_logger.debug("select interrupted by signal, returning to caller");
+                break;
             }
             aevrix::g_logger.error("select failed: " + std::string(strerror(errno)));
 #endif
@@ -329,7 +338,8 @@ bool EventLoop::run(int timeout_ms) {
                 return false;
             }
             aevrix::g_logger.debug("select timeout");
-            continue;
+            // Return to the caller so it can perform periodic maintenance.
+            break;
         }
         
         aevrix::g_logger.debug("select returned " + std::to_string(result) + " ready descriptors");
@@ -349,6 +359,9 @@ bool EventLoop::run(int timeout_ms) {
                 callback(fd, EventType::Error);
             }
         }
+        
+        // Exactly one event batch handled - return control to the caller.
+        break;
 #endif
     }
     

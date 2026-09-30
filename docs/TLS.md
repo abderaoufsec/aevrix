@@ -80,23 +80,21 @@ TLS configuration is integrated into `ServerConfig`:
 | Configuration Key | Type | Description | Default |
 |-------------------|------|-------------|---------|
 | `tls_enabled` | boolean | Enable TLS/HTTPS | `false` |
-| `tls_cert_path` | string | Path to certificate file (PEM) | (required if enabled) |
-| `tls_key_path` | string | Path to private key file (PEM) | (required if enabled) |
+| `tls_cert_file` | string | Path to certificate file (PEM) | (required if enabled) |
+| `tls_key_file` | string | Path to private key file (PEM) | (required if enabled) |
 | `tls_min_version` | string | Minimum TLS version | `TLSv1.2` |
 | `tls_max_version` | string | Maximum TLS version | `TLSv1.3` |
-| `tls_port` | integer | TLS listen port | `8443` |
-| `tls_handshake_timeout` | integer | Handshake timeout (seconds) | `10` |
+| `tls_port` | integer | TLS listen port | `443` |
 
 ### Example Configuration
 
 ```
 tls_enabled = true
-tls_cert_path = /etc/aevrix/cert.pem
-tls_key_path = /etc/aevrix/key.pem
+tls_cert_file = /etc/aevrix/cert.pem
+tls_key_file = /etc/aevrix/key.pem
 tls_min_version = TLSv1.2
 tls_max_version = TLSv1.3
 tls_port = 8443
-tls_handshake_timeout = 10
 ```
 
 ## Security Properties
@@ -118,7 +116,9 @@ tls_handshake_timeout = 10
 ### Handshake Security
 
 - Nonblocking handshake prevents DoS via blocking
-- Handshake timeout prevents slow-loris attacks
+- Handshake timeout prevents slow-loris attacks: the handshake is bounded by
+  `header_timeout_ms` and stalled handshakes are closed by the connection
+  timeout sweep (the event loop yields every ~1s so the sweep can run)
 - Failed handshakes close only the affected connection
 - Malformed ClientHello does not crash the server
 
@@ -267,7 +267,8 @@ Verify that the certificate and private key were generated together.
 
 ### Handshake timeout
 
-Increase `tls_handshake_timeout` in configuration if clients are slow.
+TLS handshakes reuse the existing `header_timeout_ms` budget (default 10000 ms).
+Increase `header_timeout_ms` in configuration if clients are slow.
 
 ### WANT_READ/WANT_WRITE loops
 

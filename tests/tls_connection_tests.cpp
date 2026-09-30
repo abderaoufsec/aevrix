@@ -95,13 +95,18 @@ TEST(TlsConnectionTest, MoveSemantics) {
         EXPECT_FALSE(conn1.is_valid());
         EXPECT_TRUE(conn2.is_valid());
 
-        // Move assign
-        TlsConnection conn3;
+        // Move assign into an existing connection (TlsConnection has no default ctor)
+        int fd2 = create_test_socket();
+        ASSERT_GE(fd2, 0) << "Second socket creation failed";
+        TlsConnection conn3(ctx, fd2);
+        EXPECT_TRUE(conn3.is_valid());
+
         conn3 = std::move(conn2);
         EXPECT_FALSE(conn2.is_valid());
         EXPECT_TRUE(conn3.is_valid());
 
         close(fd);
+        close(fd2);
     } catch (const std::exception& e) {
         FAIL() << "Move semantics test failed: " << e.what();
     }
@@ -120,10 +125,11 @@ TEST(TlsConnectionTest, HandshakeStateTracking) {
         EXPECT_EQ(conn.handshake_state(), TlsHandshakeState::NotStarted);
 
         // Attempt handshake (will fail without a real peer, but should track state)
-        TlsIoRequirement io_req = conn.do_handshake();
+        [[maybe_unused]] TlsIoRequirement io_req = conn.do_handshake();
         // Handshake will fail or need I/O, but state should change
         EXPECT_TRUE(conn.handshake_state() == TlsHandshakeState::InProgress || 
                     conn.handshake_state() == TlsHandshakeState::Failed);
+        (void)io_req;
 
         close(fd);
     } catch (const std::exception& e) {

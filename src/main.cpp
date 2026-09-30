@@ -1215,6 +1215,12 @@ int main(int argc, char* argv[]) {
                             // Register connection with ConnectionManager
                             auto conn = connection_manager.register_connection(client_fd.value());
                             if (conn) {
+                                // Start the header timeout immediately so that clients which
+                                // connect without sending a request are also reaped.
+                                conn->set_state(aevrix::ConnectionState::Reading);
+                                conn->set_read_state(aevrix::ReadState::Headers);
+                                conn->set_deadline(config);
+
                                 // Add connection to event loop for EPOLLIN
                                 int client_fd_value = client_fd.value();
                                 event_loop.add_fd(client_fd_value, EPOLLIN,

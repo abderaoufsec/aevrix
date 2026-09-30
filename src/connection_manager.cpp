@@ -240,6 +240,14 @@ bool ConnectionManager::is_timed_out(const Connection& conn) const {
 }
 
 std::string ConnectionManager::get_timeout_reason(const Connection& conn) const {
+#ifdef AEVRIX_ENABLE_TLS
+    // Phase 21: a connection stuck in the TLS handshake state is bounded by
+    // the header timeout budget (see Connection::set_deadline).
+    if (conn.state() == ConnectionState::TlsHandshake) {
+        return "TLS handshake timeout";
+    }
+#endif
+
     if (conn.has_header_timeout(*config_)) {
         return "header timeout";
     }

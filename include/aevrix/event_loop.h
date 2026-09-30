@@ -138,13 +138,16 @@ public:
     bool remove_fd(int fd);
 
     /**
-     * @brief Run the event loop
+     * @brief Run one iteration of the event loop
      * 
-     * Blocks until events occur, then invokes the appropriate callbacks.
-     * This function runs indefinitely until stop() is called.
+     * Blocks until at least one event occurs (or the timeout expires),
+     * dispatches the event callbacks for that batch, and then returns.
+     * Long-running servers call run() repeatedly from their main loop
+     * (see main.cpp) so that periodic maintenance, such as
+     * ConnectionManager::sweep_timeouts(), runs between iterations.
      * 
      * @param timeout_ms Timeout in milliseconds (or -1 for infinite wait)
-     * @return true if the loop is still running, false if stopped
+     * @return true if the loop should continue, false if stopped or failed
      */
     bool run(int timeout_ms = -1);
 

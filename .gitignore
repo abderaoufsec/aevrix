@@ -1,5 +1,7 @@
 # Build directories
 build/
+build_*/
+build-*/
 cmake-build-*/
 
 # CMake files
@@ -29,6 +31,11 @@ Makefile
 
 # Test files
 tests/aevrix_tests
+
+# TLS certificates and private keys generated for local testing
+server.crt
+server.key
+*.pem
 
 # Sanitizer reports
 *.supp

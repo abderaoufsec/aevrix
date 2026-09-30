@@ -121,6 +121,14 @@ endif()
 # =============================================================================
 enable_testing()
 
+# Find GTest for unit tests (TLS tests use gtest; other tests use custom harness)
+find_package(GTest QUIET)
+if(GTest_FOUND)
+    message(STATUS "GTest found: ${GTEST_VERSION}")
+else()
+    message(STATUS "GTest not found - TLS tests will use custom test harness fallback")
+endif()
+
 # =============================================================================
 # Main Executable
 # =============================================================================
@@ -406,6 +414,10 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
         src/logger.cpp
     )
     target_include_directories(aevrix_tls_context_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(aevrix_tls_context_tests PRIVATE AEVRIX_ENABLE_TLS)
+    if(GTest_FOUND)
+        target_link_libraries(aevrix_tls_context_tests PRIVATE GTest::GTest GTest::Main)
+    endif()
     target_link_libraries(aevrix_tls_context_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_context_tests COMMAND aevrix_tls_context_tests)
 
@@ -416,6 +428,10 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
         src/logger.cpp
     )
     target_include_directories(aevrix_tls_connection_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(aevrix_tls_connection_tests PRIVATE AEVRIX_ENABLE_TLS)
+    if(GTest_FOUND)
+        target_link_libraries(aevrix_tls_connection_tests PRIVATE GTest::GTest GTest::Main)
+    endif()
     target_link_libraries(aevrix_tls_connection_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_connection_tests COMMAND aevrix_tls_connection_tests)
 
@@ -426,6 +442,10 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
         src/logger.cpp
     )
     target_include_directories(aevrix_tls_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(aevrix_tls_integration_tests PRIVATE AEVRIX_ENABLE_TLS)
+    if(GTest_FOUND)
+        target_link_libraries(aevrix_tls_integration_tests PRIVATE GTest::GTest GTest::Main)
+    endif()
     target_link_libraries(aevrix_tls_integration_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_integration_tests COMMAND aevrix_tls_integration_tests)
 endif()

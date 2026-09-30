@@ -154,12 +154,11 @@ cmake --build build
 Add TLS settings to your configuration file:
 ```
 tls_enabled = true
-tls_cert_path = /path/to/cert.pem
-tls_key_path = /path/to/key.pem
+tls_cert_file = /path/to/cert.pem
+tls_key_file = /path/to/key.pem
 tls_min_version = TLSv1.2
 tls_max_version = TLSv1.3
 tls_port = 8443
-tls_handshake_timeout = 10
 ```
 
 **Generating a self-signed certificate for testing:**
