@@ -226,6 +226,22 @@ add_executable(aevrix
     src/filesystem_worker.cpp
 )
 
+# Phase 22 adds reverse-proxy support. The runtime pieces use POSIX sockets and
+# the epoll event loop, so they are built on non-Windows platforms only; the
+# parsing/rewriting components are portable and always built.
+target_sources(aevrix PRIVATE
+    src/proxy_target.cpp
+    src/proxy_request_builder.cpp
+    src/proxy_response_parser.cpp
+)
+
+if(NOT WIN32)
+    target_sources(aevrix PRIVATE
+        src/upstream_pool.cpp
+        src/proxy_handler.cpp
+    )
+endif()
+
 # Add TLS sources only if TLS is enabled
 if(ENABLE_TLS AND OPENSSL_FOUND)
     target_sources(aevrix PRIVATE
@@ -347,6 +363,45 @@ add_executable(aevrix_path_security_tests
 # Ensure path security tests can find aevrix headers
 target_include_directories(aevrix_path_security_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
+# Reverse proxy tests (Phase 22)
+add_executable(aevrix_proxy_target_tests
+    tests/proxy_target_tests.cpp
+    src/proxy_target.cpp
+)
+
+add_executable(aevrix_proxy_request_builder_tests
+    tests/proxy_request_builder_tests.cpp
+    src/proxy_request_builder.cpp
+    src/proxy_target.cpp
+    src/logger.cpp
+)
+
+add_executable(aevrix_proxy_response_parser_tests
+    tests/proxy_response_parser_tests.cpp
+    src/proxy_response_parser.cpp
+    src/logger.cpp
+)
+
+# Ensure proxy tests can find aevrix headers
+target_include_directories(aevrix_proxy_target_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_proxy_request_builder_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(aevrix_proxy_response_parser_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# The upstream pool is POSIX-only (like the proxy runtime itself), so its test
+# - which drives real loopback sockets from an acceptor thread - is too.
+if(NOT WIN32)
+    add_executable(aevrix_upstream_pool_tests
+        tests/upstream_pool_tests.cpp
+        src/upstream_pool.cpp
+        src/proxy_target.cpp
+    )
+
+    target_include_directories(aevrix_upstream_pool_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+    # The pool test spawns an acceptor thread and opens real loopback sockets
+    target_link_libraries(aevrix_upstream_pool_tests PRIVATE Threads::Threads)
+endif()
+
 # Ensure tests can find aevrix headers
 target_include_directories(aevrix_router_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(aevrix_http_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
@@ -404,6 +459,15 @@ add_test(NAME aevrix_timeout_enforcement_tests COMMAND aevrix_timeout_enforcemen
 # Skipped on Windows (requires Linux filesystem)
 if(UNIX)
     add_test(NAME aevrix_path_security_tests COMMAND aevrix_path_security_tests)
+endif()
+
+# Register reverse proxy tests (Phase 22)
+add_test(NAME aevrix_proxy_target_tests COMMAND aevrix_proxy_target_tests)
+add_test(NAME aevrix_proxy_request_builder_tests COMMAND aevrix_proxy_request_builder_tests)
+add_test(NAME aevrix_proxy_response_parser_tests COMMAND aevrix_proxy_response_parser_tests)
+
+if(NOT WIN32)
+    add_test(NAME aevrix_upstream_pool_tests COMMAND aevrix_upstream_pool_tests)
 endif()
 
 # Register TLS tests (Phase 21)

@@ -67,6 +67,8 @@
 #include "aevrix/filesystem_worker.h"
 #ifdef __linux__
 #include "aevrix/event_loop.h"
+#include "aevrix/proxy_handler.h"
+#include "aevrix/proxy_request_builder.h"
 #endif
 #ifdef AEVRIX_ENABLE_TLS
 #include "aevrix/tls_context.h"
@@ -450,8 +452,106 @@ aevrix::http::HttpResponse generate_response(const aevrix::http::HttpRequest& re
 }
 
 /**
+ * @brief Convert a proxy outcome into the response sent to the client (Phase 22)
+ *
+ * The upstream response is re-framed: hop-by-hop headers and the upstream's own
+ * framing headers are dropped, and Content-Length is regenerated from the body
+ * by HttpResponse itself. That guarantees the client always sees a
+ * self-consistent message even if the upstream used chunked encoding or closed
+ * the connection to delimit its body.
+ *
+ * @param outcome The upstream result
+ * @param client_keep_alive Whether the client asked for keep-alive
+ * @return HttpResponse The response to send to the client
+ */
+HttpResponse build_proxy_response(const aevrix::ProxyOutcome& outcome, bool client_keep_alive) {
+    if (outcome.status == aevrix::ProxyOutcomeStatus::Success) {
+        const uint16_t upstream_code = static_cast<uint16_t>(outcome.upstream_status);
+        const HttpResponse response(static_cast<StatusCode>(upstream_code), outcome.body);
+        HttpResponse result = response;
+
+        // Relay end-to-end headers only.
+        for (const auto& header : outcome.headers) {
+            const std::string& normalized = header.normalized_name();
+
+            if (aevrix::is_hop_by_hop_header(normalized) || normalized == "content-length") {
+                continue;
+            }
+
+            result.set_header(header.name(), header.value());
+        }
+
+        // A HEAD response carries the framing of the equivalent GET, so the
+        // upstream Content-Length is preserved instead of being regenerated,
+        // and no body bytes may follow the header block (RFC 9110 Section 9.3.2).
+        if (outcome.head_request) {
+            result.set_head_only(true);
+            const std::string upstream_length = outcome.headers.get("Content-Length");
+            if (!upstream_length.empty()) {
+                result.set_header("Content-Length", upstream_length);
+            } else {
+                // The representation length is unknown upstream (for example a
+                // chunked GET); the constructor's "0" would misreport the
+                // resource size, so the header is omitted entirely.
+                result.headers().remove("Content-Length");
+            }
+        }
+
+        result.set_header("Server", "Aevrix/0.1.0");
+        result.set_header("Via", "1.1 aevrix");
+        result.set_connection_policy(client_keep_alive ? ConnectionPolicy::KeepAlive
+                                                      : ConnectionPolicy::Close);
+        return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Upstream failure: map the outcome onto a gateway status code.
+    // -------------------------------------------------------------------------
+    StatusCode status = StatusCode::BadGateway;
+    std::string message = "Bad Gateway: the upstream server could not be reached";
+
+    switch (outcome.status) {
+        case aevrix::ProxyOutcomeStatus::GatewayTimeout:
+            status = StatusCode::GatewayTimeout;
+            message = "Gateway Timeout: the upstream server did not respond in time";
+            break;
+        case aevrix::ProxyOutcomeStatus::Unavailable:
+            status = StatusCode::ServiceUnavailable;
+            message = "Service Unavailable: no upstream capacity available";
+            break;
+        case aevrix::ProxyOutcomeStatus::UpstreamTooLarge:
+            message = "Bad Gateway: the upstream response exceeded the configured limit";
+            break;
+        case aevrix::ProxyOutcomeStatus::NotConfigured:
+            message = "Bad Gateway: the reverse proxy is not configured correctly";
+            break;
+        case aevrix::ProxyOutcomeStatus::BadGateway:
+        case aevrix::ProxyOutcomeStatus::Success:
+        default:
+            if (!outcome.error_message.empty()) {
+                message = "Bad Gateway: " + outcome.error_message;
+            }
+            break;
+    }
+
+    HttpResponse response(status, message + "\n");
+    response.set_header("Content-Type", "text/plain");
+    response.set_header("Server", "Aevrix/0.1.0");
+    response.set_header("Via", "1.1 aevrix");
+    // An error reply to HEAD keeps the Content-Length metadata but must not
+    // push body bytes onto a connection that will never read them.
+    if (outcome.head_request) {
+        response.set_head_only(true);
+    }
+    // Errors are terminal for this exchange: closing avoids ambiguity about
+    // whether an unread request body is still on the wire.
+    response.set_connection_policy(ConnectionPolicy::Close);
+    return response;
+}
+
+/**
  * @brief Handle incremental write event for a connection (Stage 4 - Response/Output State Machine)
- * 
+ *
  * This function is called from the event loop when EPOLLOUT is set for a connection.
  * It performs nonblocking writes, handling partial writes and EAGAIN/EWOULDBLOCK.
  * 
@@ -561,6 +661,7 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
                        aevrix::EventLoop& event_loop,
                        aevrix::WorkerPool& worker_pool,
                        aevrix::WorkerCompletionHandler& completion_handler,
+                       aevrix::ProxyHandler& proxy_handler,
                        const aevrix::ServerConfig& config) {
     aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                          "handle_read_event called");
@@ -631,6 +732,17 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
 
         // Increment request ID
         conn->increment_request_id();
+
+        // Phase 22: requests below the proxy prefix are forwarded to the
+        // upstream. The exchange is asynchronous: ProxyHandler drives it from
+        // the event loop and reports back through its completion callback.
+        if (proxy_handler.handles(request)) {
+            // While the upstream is working the client is idle, so its own
+            // deadlines are suspended exactly as they are for a worker task.
+            conn->set_worker_active(true);
+            proxy_handler.start(conn->id(), conn->fd(), request);
+            return true;
+        }
 
         // Stage 5: Submit blocking filesystem work to WorkerPool
         // Create worker task with immutable data
@@ -1134,6 +1246,54 @@ int main(int argc, char* argv[]) {
             // Create ConnectionManager (Stage 2)
             aevrix::ConnectionManager connection_manager(&config);
             
+            // Phase 22: reverse proxy handler.
+            // It owns the upstream half of proxied requests and reports each
+            // result through this callback, which reuses the same
+            // "output buffer + EPOLLOUT" path as static-file responses.
+            aevrix::ProxyHandler proxy_handler(
+                config, event_loop,
+                [&connection_manager, &event_loop, &config](uint64_t client_connection_id,
+                                                            aevrix::ProxyOutcome outcome) {
+                    auto conn = connection_manager.get_connection_by_id(client_connection_id);
+                    if (!conn) {
+                        aevrix::g_logger.log_with_connection(
+                            aevrix::LogLevel::DEBUG, client_connection_id,
+                            "Proxy result discarded: client connection no longer exists");
+                        return;
+                    }
+
+                    // The exchange is over, so normal timeout accounting resumes.
+                    conn->set_worker_active(false);
+                    conn->set_deadline(config);
+
+                    const aevrix::http::HttpResponse response =
+                        build_proxy_response(outcome, conn->keep_alive());
+
+                    aevrix::http::HttpResponseSerializer serializer;
+                    const std::string serialized = serializer.serialize(response);
+
+                    if (serialized.empty()) {
+                        aevrix::g_logger.log_with_connection(
+                            aevrix::LogLevel::ERR, client_connection_id,
+                            "Proxy response failed to serialize; closing client connection");
+                        // An empty output buffer reads as "already complete",
+                        // so arming EPOLLOUT would leave the client waiting
+                        // forever. Close instead: a failed exchange must fail
+                        // fast, not hang.
+                        event_loop.remove_fd(conn->fd());
+                        connection_manager.remove_connection(conn->fd());
+                        return;
+                    }
+
+                    conn->set_output_buffer(serialized);
+
+                    event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+
+                    aevrix::g_logger.log_with_connection(
+                        aevrix::LogLevel::DEBUG, client_connection_id,
+                        "Proxy response ready, EPOLLOUT enabled");
+                });
+            
             // Add completion handler eventfd to event loop (Stage 5)
             if (completion_handler.event_fd() >= 0) {
                 event_loop.add_fd(completion_handler.event_fd(), EPOLLIN,
@@ -1203,7 +1363,7 @@ int main(int argc, char* argv[]) {
             
             // Add listener socket to event loop
             if (!event_loop.add_fd(listener.get_socket(), EPOLLIN,
-                [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count
+                [&listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &proxy_handler, &config, &connection_count
 #ifdef AEVRIX_ENABLE_TLS
                  , &tls_context
 #endif
@@ -1224,7 +1384,7 @@ int main(int argc, char* argv[]) {
                                 // Add connection to event loop for EPOLLIN
                                 int client_fd_value = client_fd.value();
                                 event_loop.add_fd(client_fd_value, EPOLLIN,
-                                    [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config
+                                    [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &proxy_handler, &config
 #ifdef AEVRIX_ENABLE_TLS
                                      , &tls_context
 #endif
@@ -1273,7 +1433,8 @@ int main(int argc, char* argv[]) {
 #endif
 
                                         if (client_event == aevrix::EventType::Readable) {
-                                            bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
+                                            bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler,
+                                                               proxy_handler, config);
                                             if (!keep_alive) {
                                                 // Remove from event loop first (prevents further events)
                                                 event_loop.remove_fd(client_fd_value);
@@ -1317,7 +1478,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (!event_loop.add_fd(tls_listener->get_socket(), EPOLLIN,
-                    [&tls_listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &connection_count, &tls_context]([[maybe_unused]] int fd, aevrix::EventType event) {
+                    [&tls_listener, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &proxy_handler, &config, &connection_count, &tls_context]([[maybe_unused]] int fd, aevrix::EventType event) {
                         if (event == aevrix::EventType::Readable) {
                             // Accept new TLS connection
                             auto client_fd = tls_listener->accept();
@@ -1340,7 +1501,7 @@ int main(int argc, char* argv[]) {
                                     // Add connection to event loop for EPOLLIN (TLS handshake starts with read)
                                     int client_fd_value = client_fd.value();
                                     event_loop.add_fd(client_fd_value, EPOLLIN,
-                                        [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &config, &tls_context]([[maybe_unused]] int, aevrix::EventType client_event) {
+                                        [client_fd_value, &connection_manager, &router, &event_loop, &worker_pool, &completion_handler, &proxy_handler, &config, &tls_context]([[maybe_unused]] int, aevrix::EventType client_event) {
                                             auto conn_ptr = connection_manager.get_connection(client_fd_value);
                                             if (!conn_ptr) {
                                                 // Connection already removed, clean up event loop
@@ -1384,7 +1545,8 @@ int main(int argc, char* argv[]) {
 
                                             // After handshake, use existing HTTP handlers
                                             if (client_event == aevrix::EventType::Readable) {
-                                                bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler, config);
+                                                bool keep_alive = handle_read_event(conn_ptr, router, event_loop, worker_pool, completion_handler,
+                                                               proxy_handler, config);
                                                 if (!keep_alive) {
                                                     event_loop.remove_fd(client_fd_value);
                                                     connection_manager.remove_connection(client_fd_value);
@@ -1427,7 +1589,15 @@ int main(int argc, char* argv[]) {
                 if (timed_out > 0) {
                     aevrix::g_logger.info("Swept " + std::to_string(timed_out) + " timed-out connections");
                 }
+
+                // Phase 22: enforce upstream deadlines and evict idle pooled
+                // upstream connections that have been unused for too long.
+                proxy_handler.sweep_timeouts();
             }
+
+            // Phase 22: abandon in-flight proxy requests and close pooled
+            // upstream connections before the event loop is destroyed.
+            proxy_handler.shutdown();
             
         } catch (const std::exception& e) {
             aevrix::g_logger.error("Event loop error: " + std::string(e.what()));

@@ -84,6 +84,17 @@ std::string ServerConfig::summary() const {
     }
 #endif
 
+    oss << "  Proxy enabled: " << (proxy_enabled_ ? "yes" : "no") << "\n";
+    if (proxy_enabled_) {
+        oss << "  Proxy pass: " << proxy_pass_ << "\n";
+        oss << "  Proxy prefix: " << proxy_prefix_
+            << (proxy_strip_prefix_ ? " (prefix stripped)" : " (prefix preserved)") << "\n";
+        oss << "  Proxy connect timeout: " << proxy_connect_timeout_ms_ << " ms\n";
+        oss << "  Proxy read timeout: " << proxy_read_timeout_ms_ << " ms\n";
+        oss << "  Proxy max idle connections: " << proxy_max_idle_connections_ << "\n";
+        oss << "  Proxy max response: " << proxy_max_response_bytes_ << " bytes\n";
+    }
+
     return oss.str();
 }
 
@@ -133,6 +144,28 @@ void ServerConfig::load_from_parser(const ConfigParser& parser) {
         }
     }
 #endif
+
+    // Load reverse proxy configuration (Phase 22)
+    proxy_enabled_ = parser.get_bool("proxy_enabled", proxy_enabled_);
+    proxy_pass_ = parser.get_string("proxy_pass", proxy_pass_);
+    proxy_prefix_ = parser.get_string("proxy_prefix", proxy_prefix_);
+    proxy_strip_prefix_ = parser.get_bool("proxy_strip_prefix", proxy_strip_prefix_);
+    proxy_connect_timeout_ms_ = static_cast<uint64_t>(parser.get_int("proxy_connect_timeout_ms", static_cast<int64_t>(proxy_connect_timeout_ms_)));
+    proxy_read_timeout_ms_ = static_cast<uint64_t>(parser.get_int("proxy_read_timeout_ms", static_cast<int64_t>(proxy_read_timeout_ms_)));
+    proxy_max_idle_connections_ = static_cast<uint32_t>(parser.get_int("proxy_max_idle_connections", static_cast<int64_t>(proxy_max_idle_connections_)));
+    proxy_max_response_bytes_ = static_cast<uint32_t>(parser.get_int("proxy_max_response_bytes", static_cast<int64_t>(proxy_max_response_bytes_)));
+    proxy_idle_timeout_ms_ = static_cast<uint64_t>(parser.get_int("proxy_idle_timeout_ms", static_cast<int64_t>(proxy_idle_timeout_ms_)));
+
+    // A proxied prefix must be an absolute path, otherwise it can never match a
+    // request target.
+    if (proxy_enabled_) {
+        if (proxy_pass_.empty()) {
+            throw std::runtime_error("Proxy enabled but proxy_pass not specified");
+        }
+        if (proxy_prefix_.empty() || proxy_prefix_[0] != '/') {
+            throw std::runtime_error("proxy_prefix must be an absolute path (e.g. /proxy)");
+        }
+    }
 
     // Validate configuration
     if (port_ == 0) {

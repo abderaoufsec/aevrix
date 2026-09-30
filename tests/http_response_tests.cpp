@@ -382,6 +382,62 @@ void test_error_responses() {
 }
 
 // =============================================================================
+// HEAD Response Tests
+// =============================================================================
+
+void test_serializer_head_only_response() {
+    using namespace aevrix::http;
+
+    // A response to HEAD keeps the upstream Content-Length but carries no body.
+    // An empty wire result here would hang the client: an empty output buffer
+    // is treated as "already complete" and no bytes would ever be written.
+    HttpResponse head(StatusCode::OK, "");
+    head.set_head_only(true);
+    head.set_header("Content-Length", "15");
+
+    TEST_ASSERT(head.is_valid(), "HEAD response with upstream Content-Length is valid");
+
+    const std::string wire = HttpResponseSerializer::serialize(head);
+    TEST_ASSERT(!wire.empty(), "HEAD response serializes to bytes");
+
+    const std::string header_terminator = "\r\n\r\n";
+    const size_t body_offset = wire.find(header_terminator);
+    TEST_ASSERT(body_offset != std::string::npos, "HEAD response has header/body separator");
+    TEST_ASSERT(wire.find("Content-Length: 15") != std::string::npos,
+                "HEAD response preserves upstream Content-Length");
+    TEST_ASSERT(wire.substr(body_offset + header_terminator.length()).empty(),
+                "HEAD response carries no body bytes");
+
+    // The same framing without the flag is still a validation error.
+    HttpResponse mismatch(StatusCode::OK, "");
+    mismatch.set_header("Content-Length", "15");
+    TEST_ASSERT(!mismatch.is_valid(), "Content-Length mismatch still rejected without head_only");
+    TEST_ASSERT(HttpResponseSerializer::serialize(mismatch).empty(),
+                "mismatched response serializes to empty bytes");
+
+    // head_only suppresses the body even when one is attached, so an error
+    // reply can keep Content-Length describing what a GET would return.
+    HttpResponse head_error(StatusCode::GatewayTimeout, "Gateway Timeout\n");
+    head_error.set_head_only(true);
+    TEST_ASSERT(head_error.is_valid(), "head_only error response with body is valid");
+    const std::string head_error_wire = HttpResponseSerializer::serialize(head_error);
+    TEST_ASSERT(!head_error_wire.empty(), "head_only error response serializes to bytes");
+    TEST_ASSERT(head_error_wire.find("Content-Length: 16") != std::string::npos,
+                "head_only error response keeps Content-Length metadata");
+    const size_t head_error_body = head_error_wire.find(header_terminator);
+    TEST_ASSERT(head_error_body != std::string::npos &&
+                    head_error_wire.substr(head_error_body + header_terminator.length()).empty(),
+                "head_only error response carries no body bytes");
+
+    // HEAD without an upstream length omits Content-Length entirely.
+    HttpResponse head_unknown(StatusCode::OK, "");
+    head_unknown.set_head_only(true);
+    TEST_ASSERT(head_unknown.is_valid(), "HEAD response without Content-Length is valid");
+    TEST_ASSERT(head_unknown.headers().get("Content-Length").empty(),
+                "head_only response without explicit length has no Content-Length");
+}
+
+// =============================================================================
 // Test Runner
 // =============================================================================
 
@@ -427,6 +483,7 @@ int run_http_response_tests() {
         test_serializer_crlf_endings();
         test_serializer_validation();
         test_serializer_invalid_response();
+        test_serializer_head_only_response();
         
         // Integration tests
         std::cout << "\n--- Integration Tests ---\n";

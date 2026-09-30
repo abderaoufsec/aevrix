@@ -412,6 +412,100 @@ public:
      */
     void set_tls_port(uint16_t port) { tls_port_ = port; }
 
+    // =========================================================================
+    // Reverse Proxy Configuration (Phase 22)
+    // =========================================================================
+
+    /**
+     * @brief Whether reverse-proxy routing is enabled
+     */
+    bool proxy_enabled() const { return proxy_enabled_; }
+
+    /**
+     * @brief Enable or disable reverse-proxy routing
+     */
+    void set_proxy_enabled(bool enabled) { proxy_enabled_ = enabled; }
+
+    /**
+     * @brief Get the upstream specification (e.g. "http://127.0.0.1:9001")
+     */
+    const std::string& proxy_pass() const { return proxy_pass_; }
+
+    /**
+     * @brief Set the upstream specification
+     */
+    void set_proxy_pass(const std::string& proxy_pass) { proxy_pass_ = proxy_pass; }
+
+    /**
+     * @brief Get the path prefix routed to the upstream (e.g. "/proxy")
+     */
+    const std::string& proxy_prefix() const { return proxy_prefix_; }
+
+    /**
+     * @brief Set the path prefix routed to the upstream
+     */
+    void set_proxy_prefix(const std::string& prefix) { proxy_prefix_ = prefix; }
+
+    /**
+     * @brief Whether the prefix is removed before forwarding
+     */
+    bool proxy_strip_prefix() const { return proxy_strip_prefix_; }
+
+    /**
+     * @brief Set whether the prefix is removed before forwarding
+     */
+    void set_proxy_strip_prefix(bool strip) { proxy_strip_prefix_ = strip; }
+
+    /**
+     * @brief Maximum time allowed for the upstream TCP connect (ms)
+     */
+    uint64_t proxy_connect_timeout_ms() const { return proxy_connect_timeout_ms_; }
+
+    /**
+     * @brief Set the upstream connect timeout (ms)
+     */
+    void set_proxy_connect_timeout_ms(uint64_t timeout_ms) { proxy_connect_timeout_ms_ = timeout_ms; }
+
+    /**
+     * @brief Maximum time allowed for the upstream response (ms)
+     */
+    uint64_t proxy_read_timeout_ms() const { return proxy_read_timeout_ms_; }
+
+    /**
+     * @brief Set the upstream read timeout (ms)
+     */
+    void set_proxy_read_timeout_ms(uint64_t timeout_ms) { proxy_read_timeout_ms_ = timeout_ms; }
+
+    /**
+     * @brief Maximum idle keep-alive connections kept per upstream
+     */
+    uint32_t proxy_max_idle_connections() const { return proxy_max_idle_connections_; }
+
+    /**
+     * @brief Set the maximum idle keep-alive connections per upstream
+     */
+    void set_proxy_max_idle_connections(uint32_t value) { proxy_max_idle_connections_ = value; }
+
+    /**
+     * @brief Maximum upstream response body size buffered (bytes)
+     */
+    uint32_t proxy_max_response_bytes() const { return proxy_max_response_bytes_; }
+
+    /**
+     * @brief Set the maximum upstream response body size (bytes)
+     */
+    void set_proxy_max_response_bytes(uint32_t value) { proxy_max_response_bytes_ = value; }
+
+    /**
+     * @brief Idle timeout for pooled upstream connections (ms)
+     */
+    uint64_t proxy_idle_timeout_ms() const { return proxy_idle_timeout_ms_; }
+
+    /**
+     * @brief Set the pooled connection idle timeout (ms)
+     */
+    void set_proxy_idle_timeout_ms(uint64_t timeout_ms) { proxy_idle_timeout_ms_ = timeout_ms; }
+
 private:
     // =========================================================================
     // Timeout Configuration (milliseconds)
@@ -449,6 +543,20 @@ private:
     std::string tls_min_version_;      // Minimum TLS version (e.g., "TLSv1.2")
     std::string tls_max_version_;      // Maximum TLS version (e.g., "TLSv1.3")
     uint16_t tls_port_ = 443;          // TLS listen port (default 443)
+
+    // =========================================================================
+    // Reverse Proxy Configuration (Phase 22)
+    // =========================================================================
+
+    bool proxy_enabled_ = false;                    // Whether proxying is enabled
+    std::string proxy_pass_;                        // Upstream specification
+    std::string proxy_prefix_ = "/proxy";           // Routed path prefix
+    bool proxy_strip_prefix_ = true;                // Strip prefix when forwarding
+    uint64_t proxy_connect_timeout_ms_ = 5000;      // Upstream connect budget
+    uint64_t proxy_read_timeout_ms_ = 30000;        // Upstream response budget
+    uint32_t proxy_max_idle_connections_ = 4;       // Idle connections per upstream
+    uint32_t proxy_max_response_bytes_ = 4 * 1024 * 1024;  // Buffered body cap
+    uint64_t proxy_idle_timeout_ms_ = 60000;        // Pooled connection idle budget
 };
 
 } // namespace aevrix

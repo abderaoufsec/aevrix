@@ -124,6 +124,34 @@ public:
     HttpResponse(StatusCode status, const HttpHeaders& headers, const std::string& body);
 
     // =========================================================================
+    // HEAD Framing (RFC 9110 Section 9.3.2)
+    // =========================================================================
+
+    /**
+     * @brief Mark this response as the reply to a HEAD request
+     *
+     * A response to HEAD carries the header fields of the equivalent GET,
+     * including Content-Length, but never a message body. Setting this flag
+     * tells validation that a Content-Length which does not match the body is
+     * intentional framing metadata rather than a framing error, and tells the
+     * serializer to emit header fields only.
+     *
+     * @param head_only Whether this response replies to a HEAD request
+     */
+    void set_head_only(bool head_only) {
+        head_only_ = head_only;
+    }
+
+    /**
+     * @brief Whether this response replies to a HEAD request
+     *
+     * @return true when this response must be serialized without a body
+     */
+    bool head_only() const {
+        return head_only_;
+    }
+
+    // =========================================================================
     // Status Line Management
     // =========================================================================
 
@@ -362,6 +390,7 @@ private:
     HttpHeaders headers_;          ///< Response headers
     std::string body_;             ///< Response body content
     ConnectionPolicy connection_policy_;  ///< Connection policy for this response
+    bool head_only_ = false;          ///< Reply to HEAD: header fields only, no body
 };
 
 // =============================================================================
@@ -418,6 +447,7 @@ inline void HttpResponse::reset() {
     headers_.clear();
     body_.clear();
     connection_policy_ = ConnectionPolicy::KeepAlive;
+    head_only_ = false;
 }
 
 inline void HttpResponse::update_content_length() {
@@ -473,10 +503,10 @@ inline bool HttpResponse::is_valid() const {
     if (!content_length_str.empty()) {
         try {
             size_t content_length = std::stoul(content_length_str);
-            // Content-Length should match body length
-            // Exception: For HEAD responses, Content-Length can be 0 even if body is empty
-            // This is a special case for Phase 5; Phase 6 will handle this properly
-            if (content_length != body_.length() && !(body_.empty() && content_length == 0)) {
+            // Content-Length should match body length, except for responses to
+            // HEAD: there the value describes the representation a GET would
+            // return while no body is ever sent (RFC 9110 Section 9.3.2).
+            if (content_length != body_.length() && !head_only_) {
                 return false;  // Content-Length doesn't match body length
             }
         } catch (...) {

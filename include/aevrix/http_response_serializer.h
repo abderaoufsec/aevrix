@@ -166,8 +166,10 @@ inline std::string HttpResponseSerializer::serialize(const HttpResponse& respons
     // 3. Add empty line to separate headers from body
     oss << CRLF;
 
-    // 4. Append body (if any)
-    if (response.has_body()) {
+    // 4. Append body (if any). A response to HEAD never carries body bytes,
+    // even when the object still holds the representation data so that
+    // Content-Length can describe it.
+    if (response.has_body() && !response.head_only()) {
         oss << response.body();
     }
 
