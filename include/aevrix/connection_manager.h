@@ -30,6 +30,7 @@
 #include <memory>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 #include "aevrix/connection.h"
 #include "aevrix/server_config.h"
 
@@ -211,6 +212,35 @@ public:
      * @return size_t The number of connections removed
      */
     size_t remove_all();
+
+    // =========================================================================
+    // WebSocket Maintenance (Phase 23)
+    // =========================================================================
+
+    /**
+     * @brief Queue keepalive Ping frames for upgraded connections
+     *
+     * Scans active WebSocket sessions and, for each one whose ping interval
+     * has elapsed, queues a Ping frame and collects the file descriptor so
+     * the caller can arm EPOLLOUT for the flush.
+     *
+     * @param ping_interval_ms Configured server ping interval (0 = disabled)
+     * @return std::vector<int> File descriptors with freshly queued output
+     */
+    std::vector<int> maintain_websockets(uint64_t ping_interval_ms);
+
+    /**
+     * @brief Best-effort WebSocket Close handshake on server shutdown
+     *
+     * Queues a Close frame (going away) for every upgraded connection and
+     * attempts a bounded nonblocking flush. Called after the event loop has
+     * stopped, so no further reads are expected; the peer's reply is not
+     * awaited.
+     *
+     * @param code Close status code to send (1001 = going away)
+     * @return size_t Number of WebSocket connections notified
+     */
+    size_t initiate_websocket_shutdown(uint16_t code);
 
 private:
     // =========================================================================

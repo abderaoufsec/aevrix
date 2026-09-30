@@ -8,6 +8,7 @@
 #include "aevrix/connection_manager.h"
 #include "aevrix/logger.h"
 #include <algorithm>
+#include <vector>
 
 namespace aevrix {
 
@@ -226,6 +227,60 @@ size_t ConnectionManager::remove_all() {
 }
 
 // =============================================================================
+// WebSocket Maintenance (Phase 23)
+// =============================================================================
+
+std::vector<int> ConnectionManager::maintain_websockets(uint64_t ping_interval_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<int> fds;
+    for (auto& entry : connections_) {
+        Connection* conn = entry.second.get();
+        auto* ws_session = conn->websocket();
+        if (ws_session == nullptr) {
+            continue;
+        }
+        if (ws_session->maybe_queue_ping(ping_interval_ms)) {
+            conn->append_output_buffer(ws_session->take_output());
+            conn->set_write_state(WriteState::Body);
+            conn->set_deadline(*config_);
+            fds.push_back(entry.first);
+        }
+    }
+    return fds;
+}
+
+size_t ConnectionManager::initiate_websocket_shutdown(uint16_t code) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    size_t notified = 0;
+    for (auto& entry : connections_) {
+        Connection* conn = entry.second.get();
+        auto* ws_session = conn->websocket();
+        if (ws_session == nullptr) {
+            continue;
+        }
+
+        ws_session->initiate_close(code);
+        conn->append_output_buffer(ws_session->take_output());
+
+        // Best-effort flush: the event loop has already stopped, so drain
+        // whatever the nonblocking socket accepts before the fds are closed.
+        while (conn->has_pending_output()) {
+            const Connection::IoResult result = conn->write_nonblocking();
+            if (result != Connection::IoResult::Success) {
+                break;
+            }
+        }
+
+        aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(),
+                                             "WebSocket close frame queued for shutdown");
+        ++notified;
+    }
+    return notified;
+}
+
+// =============================================================================
 // Private Helper Methods
 // =============================================================================
 
@@ -263,7 +318,14 @@ std::string ConnectionManager::get_timeout_reason(const Connection& conn) const 
     if (conn.has_keep_alive_timeout(*config_)) {
         return "keep-alive timeout";
     }
-    
+
+    // Phase 23: upgraded connections report WebSocket-specific reasons.
+    if (conn.is_websocket()) {
+        return conn.websocket()->state() == ws::WebSocketState::Closing
+                   ? "WebSocket close handshake timeout"
+                   : "WebSocket idle timeout";
+    }
+
     return "unknown";
 }
 

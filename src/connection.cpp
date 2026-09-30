@@ -428,7 +428,20 @@ void Connection::set_deadline(const ServerConfig& config) {
         timeout_ms = config.header_timeout_ms();
     } else
 #endif
-    if (read_state_ == ReadState::Headers) {
+    // Phase 23: upgraded connections leave the HTTP timeout states behind.
+    // Pending writes use the write budget (the 101 response and frame
+    // flushes), an in-flight close handshake uses the close budget, and an
+    // established but idle session is bounded by the keep-alive timeout
+    // (server pings, when enabled, keep it alive).
+    if (websocket_) {
+        if (write_state_ == WriteState::Body || write_state_ == WriteState::Headers) {
+            timeout_ms = config.write_timeout_ms();
+        } else if (websocket_->state() == ws::WebSocketState::Closing) {
+            timeout_ms = config.websocket_close_timeout_ms();
+        } else {
+            timeout_ms = config.keep_alive_timeout_ms();
+        }
+    } else if (read_state_ == ReadState::Headers) {
         timeout_ms = config.header_timeout_ms();
     } else if (read_state_ == ReadState::Body) {
         timeout_ms = config.body_timeout_ms();

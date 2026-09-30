@@ -235,6 +235,15 @@ target_sources(aevrix PRIVATE
     src/proxy_response_parser.cpp
 )
 
+# Phase 23 adds WebSocket support. The framing/handshake/state-machine layers
+# are portable (no sockets), so they build on every platform; the epoll-driven
+# upgrade path lives in main.cpp like the rest of the event loop.
+target_sources(aevrix PRIVATE
+    src/websocket_frame.cpp
+    src/websocket_handshake.cpp
+    src/websocket_connection.cpp
+)
+
 if(NOT WIN32)
     target_sources(aevrix PRIVATE
         src/upstream_pool.cpp
@@ -326,6 +335,8 @@ add_executable(aevrix_connection_manager_tests
     src/server_config.cpp
     src/config_parser.cpp
     src/logger.cpp
+    src/websocket_connection.cpp
+    src/websocket_frame.cpp
 )
 
 # Ensure connection manager tests can find aevrix headers
@@ -469,6 +480,32 @@ add_test(NAME aevrix_proxy_response_parser_tests COMMAND aevrix_proxy_response_p
 if(NOT WIN32)
     add_test(NAME aevrix_upstream_pool_tests COMMAND aevrix_upstream_pool_tests)
 endif()
+
+# WebSocket frame/connection tests (Phase 23)
+add_executable(aevrix_websocket_frame_tests
+    tests/websocket_frame_tests.cpp
+    src/websocket_frame.cpp
+    src/websocket_connection.cpp
+)
+target_include_directories(aevrix_websocket_frame_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+if(WIN32)
+    target_link_libraries(aevrix_websocket_frame_tests PRIVATE ws2_32)
+endif()
+add_test(NAME aevrix_websocket_frame_tests COMMAND aevrix_websocket_frame_tests)
+
+# WebSocket upgrade handshake tests (Phase 23)
+add_executable(aevrix_websocket_handshake_tests
+    tests/websocket_handshake_tests.cpp
+    src/websocket_handshake.cpp
+    src/server_config.cpp
+    src/config_parser.cpp
+    src/logger.cpp
+)
+target_include_directories(aevrix_websocket_handshake_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+if(WIN32)
+    target_link_libraries(aevrix_websocket_handshake_tests PRIVATE ws2_32)
+endif()
+add_test(NAME aevrix_websocket_handshake_tests COMMAND aevrix_websocket_handshake_tests)
 
 # Register TLS tests (Phase 21)
 if(ENABLE_TLS AND OPENSSL_FOUND)

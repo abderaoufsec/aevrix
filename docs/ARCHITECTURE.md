@@ -614,6 +614,44 @@ The exact configuration format can change. The important architectural
 requirement is that configuration be represented by a typed C++
 structure after parsing.
 
+### 19.1 WebSocket Upgrade (Phase 23, RFC 6455)
+
+WebSocket is a transport switch negotiated through HTTP, not a part of
+the HTTP parser. After a successful `101 Switching Protocols` response
+the connection leaves the request/response cycle and enters frame mode:
+
+``` text
+HTTP Upgrade request
+     ↓
+evaluate_upgrade() (path allowlist, Upgrade/Connection tokens,
+                    version 13, Sec-WebSocket-Key, Origin allowlist)
+     ↓
+101 Switching Protocols  →  Connection::begin_websocket()
+     ↓
+WebSocketConnection::feed() / take_output() (RFC 6455 framing)
+```
+
+Rules that keep the layers separate:
+
+- The HTTP request parser is never modified for WebSocket; the upgrade
+  decision reads the already-parsed `HttpRequest` (`aevrix/ws/`
+  handshake module).
+- Frame parsing/serialization (`FrameParser`, `encode_frame`) is an
+  independent layer activated only after the handshake succeeds.
+- `WebSocketConnection` owns sequencing policy (masking requirement,
+  fragmentation reassembly, Ping/Pong/Close, UTF-8 and size limits,
+  close handshake) and performs no socket I/O itself: the event loop
+  feeds bytes in and drains serialized frames through the existing
+  nonblocking (and TLS, for `wss://`) write paths.
+- Timeouts still apply: established sessions are bounded by the
+  keep-alive deadline; half-closed sessions by the close timeout.
+- Configuration is opt-in (`websocket_enabled`, `websocket_paths`,
+  `websocket_max_message_bytes`, `websocket_close_timeout_ms`,
+  `websocket_ping_interval_ms`, `websocket_allowed_origins`).
+- Echo behavior is the built-in application policy: text/binary
+  messages are echoed, Ping is answered with Pong, Close is echoed and
+  the TCP connection drops once both Close frames exchanged.
+
 ## 20. Graceful Shutdown
 
 Shutdown sequence:

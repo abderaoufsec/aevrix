@@ -47,6 +47,7 @@
 #include "aevrix/http_request_parser.h"
 #include "aevrix/http_request.h"
 #include "aevrix/http_response.h"
+#include "aevrix/websocket_connection.h"
 
 #ifdef AEVRIX_ENABLE_TLS
 #include "aevrix/tls_connection.h"
@@ -523,6 +524,38 @@ public:
     bool is_worker_active() const { return worker_active_; }
 
     // =========================================================================
+    // WebSocket Support (Phase 23)
+    // =========================================================================
+
+    /**
+     * @brief Enter WebSocket mode after a successful HTTP Upgrade
+     *
+     * Creates the RAII-owned WebSocket session that takes over frame-level
+     * I/O for the remainder of the connection. The HTTP parser is left
+     * untouched: it simply stops being consulted.
+     *
+     * @param max_message_bytes Configured frame/message size ceiling
+     */
+    void begin_websocket(uint64_t max_message_bytes) {
+        websocket_ = std::make_unique<ws::WebSocketConnection>(max_message_bytes);
+    }
+
+    /**
+     * @brief Access the WebSocket session (nullptr while in HTTP mode)
+     */
+    ws::WebSocketConnection* websocket() { return websocket_.get(); }
+
+    /**
+     * @brief Const access to the WebSocket session
+     */
+    const ws::WebSocketConnection* websocket() const { return websocket_.get(); }
+
+    /**
+     * @brief True once the connection has been upgraded to WebSocket
+     */
+    bool is_websocket() const { return websocket_ != nullptr; }
+
+    // =========================================================================
     // Connection Identifiers
     // =========================================================================
 
@@ -711,6 +744,12 @@ private:
 
     std::chrono::steady_clock::time_point deadline_;  // Current deadline for timeout
     bool worker_active_ = false;  // Whether a worker task is active (Stage 6)
+
+    // =========================================================================
+    // WebSocket State (Phase 23)
+    // =========================================================================
+
+    std::unique_ptr<ws::WebSocketConnection> websocket_;  // Post-upgrade session
 
     // =========================================================================
     // TLS State (Phase 21)

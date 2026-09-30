@@ -69,6 +69,7 @@
 #include "aevrix/event_loop.h"
 #include "aevrix/proxy_handler.h"
 #include "aevrix/proxy_request_builder.h"
+#include "aevrix/websocket_handshake.h"
 #endif
 #ifdef AEVRIX_ENABLE_TLS
 #include "aevrix/tls_context.h"
@@ -599,6 +600,35 @@ bool handle_write_event(std::shared_ptr<aevrix::Connection> conn,
         aevrix::g_logger.log_with_connection(aevrix::LogLevel::DEBUG, conn->id(),
                                              "Output complete");
 
+        // Phase 23: an upgraded connection flushes frames instead of cycling
+        // through HTTP keep-alive. Once both Close frames have been exchanged
+        // and everything is flushed, the TCP connection may be dropped.
+        if (conn->is_websocket()) {
+            auto* ws_session = conn->websocket();
+
+            if (ws_session->has_pending_output()) {
+                // Frames queued while the previous batch was flushing.
+                conn->append_output_buffer(ws_session->take_output());
+                conn->set_write_state(aevrix::WriteState::Body);
+                event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+                conn->set_deadline(config);
+                return true;
+            }
+
+            conn->set_write_state(aevrix::WriteState::Complete);
+            conn->set_deadline(config);
+
+            if (ws_session->ready_to_close()) {
+                aevrix::g_logger.log_with_connection(aevrix::LogLevel::INFO, conn->id(),
+                                                     "WebSocket close handshake complete");
+                return false;  // Close TCP connection
+            }
+
+            // Back to frame reads only (EPOLLOUT disarmed).
+            event_loop.modify_fd(conn->fd(), EPOLLIN);
+            return true;
+        }
+
         // Output complete - check keep-alive
         if (conn->keep_alive()) {
             // Keep connection alive for next request
@@ -693,6 +723,28 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
         return false;  // Close connection
     }
 
+    // Phase 23: once upgraded, raw bytes belong to the WebSocket frame layer
+    // and the HTTP parser is bypassed entirely (separation of concerns).
+    if (conn->is_websocket()) {
+        auto* ws_session = conn->websocket();
+        ws_session->feed(conn->input_buffer().data(), conn->input_buffer().size());
+        conn->clear_input_buffer();
+        conn->update_activity();
+
+        if (ws_session->had_protocol_error()) {
+            aevrix::g_logger.log_with_connection(aevrix::LogLevel::WARN, conn->id(),
+                                                 "WebSocket protocol error, close frame queued");
+        }
+
+        if (ws_session->has_pending_output()) {
+            conn->append_output_buffer(ws_session->take_output());
+            conn->set_write_state(aevrix::WriteState::Body);
+            event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+        }
+        conn->set_deadline(config);
+        return true;  // Close decision happens when the output flushes
+    }
+
     // Data received successfully - feed to parser
     if (!conn->feed_parser()) {
         // Parser error occurred
@@ -732,6 +784,49 @@ bool handle_read_event(std::shared_ptr<aevrix::Connection> conn,
 
         // Increment request ID
         conn->increment_request_id();
+
+        // Phase 23: WebSocket upgrade (RFC 6455). Evaluated before the proxy
+        // and worker paths because Aevrix terminates WebSocket itself: a
+        // valid upgrade swaps the connection into frame mode with a 101
+        // response, while a malformed upgrade attempt is rejected outright.
+        if (config.websocket_enabled()) {
+            const aevrix::ws::UpgradeResult upgrade =
+                aevrix::ws::evaluate_upgrade(request, config);
+
+            if (upgrade.verdict == aevrix::ws::UpgradeVerdict::Accepted) {
+                conn->begin_websocket(config.websocket_max_message_bytes());
+                conn->set_output_buffer(upgrade.response);
+                conn->set_keep_alive(false);
+                conn->set_state(aevrix::ConnectionState::Writing);
+                conn->set_write_state(aevrix::WriteState::Body);
+                conn->set_deadline(config);
+                event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::INFO, conn->id(),
+                                                  conn->request_id(),
+                                                  "WebSocket upgrade accepted: " + request.target());
+                return true;
+            }
+
+            if (upgrade.verdict != aevrix::ws::UpgradeVerdict::NotAnUpgrade) {
+                const aevrix::http::HttpResponse rejection =
+                    aevrix::ws::build_rejection_response(upgrade.verdict);
+                conn->set_output_buffer(
+                    aevrix::http::HttpResponseSerializer::serialize(rejection));
+                conn->set_keep_alive(false);
+                conn->set_state(aevrix::ConnectionState::Writing);
+                conn->set_write_state(aevrix::WriteState::Body);
+                conn->set_deadline(config);
+                event_loop.modify_fd(conn->fd(), EPOLLIN | EPOLLOUT);
+
+                aevrix::g_logger.log_with_request(aevrix::LogLevel::WARN, conn->id(),
+                                                  conn->request_id(),
+                                                  "WebSocket upgrade rejected ("
+                                                      + std::to_string(static_cast<int>(upgrade.verdict))
+                                                      + "): " + request.target());
+                return true;
+            }
+        }
 
         // Phase 22: requests below the proxy prefix are forwarded to the
         // upstream. The exchange is asynchronous: ProxyHandler drives it from
@@ -1593,6 +1688,23 @@ int main(int argc, char* argv[]) {
                 // Phase 22: enforce upstream deadlines and evict idle pooled
                 // upstream connections that have been unused for too long.
                 proxy_handler.sweep_timeouts();
+
+                // Phase 23: queue server keepalive Pings whose interval has
+                // elapsed and arm EPOLLOUT so they flush promptly.
+                if (config.websocket_ping_interval_ms() > 0) {
+                    for (int fd : connection_manager.maintain_websockets(
+                             config.websocket_ping_interval_ms())) {
+                        event_loop.modify_fd(fd, EPOLLIN | EPOLLOUT);
+                    }
+                }
+            }
+
+            // Phase 23: offer WebSocket peers a Close(1001 going away) before
+            // the sockets are torn down.
+            const size_t ws_notified = connection_manager.initiate_websocket_shutdown(1001);
+            if (ws_notified > 0) {
+                aevrix::g_logger.info("Queued WebSocket close frames for " +
+                                      std::to_string(ws_notified) + " connection(s)");
             }
 
             // Phase 22: abandon in-flight proxy requests and close pooled

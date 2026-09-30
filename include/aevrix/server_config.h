@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // Forward declaration for ConfigParser
 namespace aevrix {
@@ -506,6 +507,70 @@ public:
      */
     void set_proxy_idle_timeout_ms(uint64_t timeout_ms) { proxy_idle_timeout_ms_ = timeout_ms; }
 
+    // =========================================================================
+    // WebSocket Configuration (Phase 23)
+    // =========================================================================
+
+    /**
+     * @brief Whether the WebSocket upgrade endpoint is enabled
+     */
+    bool websocket_enabled() const { return websocket_enabled_; }
+
+    /**
+     * @brief Enable or disable WebSocket upgrades
+     */
+    void set_websocket_enabled(bool enabled) { websocket_enabled_ = enabled; }
+
+    /**
+     * @brief Paths that accept WebSocket upgrades (exact match, no query)
+     */
+    const std::vector<std::string>& websocket_allowed_paths() const { return websocket_allowed_paths_; }
+
+    /**
+     * @brief Replace the WebSocket path allowlist
+     */
+    void set_websocket_allowed_paths(std::vector<std::string> paths) { websocket_allowed_paths_ = std::move(paths); }
+
+    /**
+     * @brief Ceiling for a single WebSocket frame or assembled message (bytes)
+     */
+    uint32_t websocket_max_message_bytes() const { return websocket_max_message_bytes_; }
+
+    /**
+     * @brief Set the WebSocket message size ceiling (bytes)
+     */
+    void set_websocket_max_message_bytes(uint32_t bytes) { websocket_max_message_bytes_ = bytes; }
+
+    /**
+     * @brief Budget for completing a WebSocket close handshake (ms)
+     */
+    uint64_t websocket_close_timeout_ms() const { return websocket_close_timeout_ms_; }
+
+    /**
+     * @brief Set the WebSocket close handshake budget (ms)
+     */
+    void set_websocket_close_timeout_ms(uint64_t timeout_ms) { websocket_close_timeout_ms_ = timeout_ms; }
+
+    /**
+     * @brief Server-initiated Ping interval (ms); 0 disables keepalive pings
+     */
+    uint64_t websocket_ping_interval_ms() const { return websocket_ping_interval_ms_; }
+
+    /**
+     * @brief Set the server-initiated Ping interval (ms, 0 = disabled)
+     */
+    void set_websocket_ping_interval_ms(uint64_t interval_ms) { websocket_ping_interval_ms_ = interval_ms; }
+
+    /**
+     * @brief Allowed Origin values for WebSocket upgrades (empty = allow any)
+     */
+    const std::vector<std::string>& websocket_allowed_origins() const { return websocket_allowed_origins_; }
+
+    /**
+     * @brief Replace the WebSocket Origin allowlist (empty = allow any)
+     */
+    void set_websocket_allowed_origins(std::vector<std::string> origins) { websocket_allowed_origins_ = std::move(origins); }
+
 private:
     // =========================================================================
     // Timeout Configuration (milliseconds)
@@ -557,6 +622,17 @@ private:
     uint32_t proxy_max_idle_connections_ = 4;       // Idle connections per upstream
     uint32_t proxy_max_response_bytes_ = 4 * 1024 * 1024;  // Buffered body cap
     uint64_t proxy_idle_timeout_ms_ = 60000;        // Pooled connection idle budget
+
+    // =========================================================================
+    // WebSocket Configuration (Phase 23)
+    // =========================================================================
+
+    bool websocket_enabled_ = false;                        // Opt-in feature flag
+    std::vector<std::string> websocket_allowed_paths_{"/ws"};  // Upgrade paths
+    uint32_t websocket_max_message_bytes_ = 1024 * 1024;    // 1 MiB frame/message cap
+    uint64_t websocket_close_timeout_ms_ = 5000;            // Close handshake budget
+    uint64_t websocket_ping_interval_ms_ = 0;               // 0 disables server pings
+    std::vector<std::string> websocket_allowed_origins_;    // Empty = allow any
 };
 
 } // namespace aevrix

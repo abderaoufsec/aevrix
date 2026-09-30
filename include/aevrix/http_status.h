@@ -156,6 +156,13 @@ enum class StatusCode : uint16_t {
      */
     TooManyRequests = 429,
 
+    /**
+     * 426 Upgrade Required
+     * The request is a valid WebSocket upgrade attempt, but the client offered
+     * an unsupported protocol version (RFC 6455 Section 4.2.2).
+     */
+    UpgradeRequired = 426,
+
     // =========================================================================
     // 5xx Server Error - The server failed to fulfill a valid request
     // =========================================================================
@@ -239,6 +246,7 @@ inline std::string status_code_to_string(StatusCode status) {
         case StatusCode::Conflict: return "Conflict";
         case StatusCode::ContentTooLarge: return "Content Too Large";
         case StatusCode::TooManyRequests: return "Too Many Requests";
+        case StatusCode::UpgradeRequired: return "Upgrade Required";
         
         // 5xx Server Error
         case StatusCode::InternalServerError: return "Internal Server Error";
