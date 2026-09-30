@@ -6,12 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-- Release engineering infrastructure (Phase 25): SECURITY.md, CONTRIBUTING.md,
-  CHANGELOG.md, CODE_OF_CONDUCT.md, DEPLOYMENT.md, GitHub issue/PR templates,
-  release workflow.
-
 ## [1.0.0] - 2026-09-30
+
+Stable v1.0.0 release. Definition of Done verified: 20/20 CTest (TLS-ON),
+17/17 (TLS-OFF), ASan/UBSan/TSan clean, 6/6 smoke scripts (proxy, WebSocket,
+reload). Release engineering: SECURITY.md, CONTRIBUTING.md, CHANGELOG.md,
+CODE_OF_CONDUCT.md, DEPLOYMENT.md, GitHub issue/PR templates, release
+workflow. Project version bumped to 1.0.0 (CMake, `Server: Aevrix/1.0.0`,
+`/server-info`). TSan race fixed in upstream-pool test listener.
 
 First stable release: a complete, tested HTTP/1.1 server in C++20.
 
