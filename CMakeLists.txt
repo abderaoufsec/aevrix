@@ -219,6 +219,7 @@ add_executable(aevrix
     src/config_parser.cpp
     src/logger.cpp
     src/signal_handler.cpp
+    src/server_config_store.cpp
     src/http_cache.cpp
     src/metrics.cpp
     src/observability.cpp
@@ -337,10 +338,31 @@ add_executable(aevrix_connection_manager_tests
     src/logger.cpp
     src/websocket_connection.cpp
     src/websocket_frame.cpp
+    # Phase 24: ConnectionManager reads limits through the config store.
+    src/server_config_store.cpp
 )
 
 # Ensure connection manager tests can find aevrix headers
 target_include_directories(aevrix_connection_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Configuration reload tests (Phase 24 - atomic config store / SIGHUP reload).
+# Links the store plus its consumers (ConnectionManager) and the signal handler,
+# so the atomic swap and the wake-up path are exercised for real.
+add_executable(aevrix_config_reload_tests
+    tests/config_reload_tests.cpp
+    src/server_config_store.cpp
+    src/server_config.cpp
+    src/config_parser.cpp
+    src/logger.cpp
+    src/signal_handler.cpp
+    src/connection_manager.cpp
+    src/connection.cpp
+    src/websocket_connection.cpp
+    src/websocket_frame.cpp
+)
+
+# Ensure configuration reload tests can find aevrix headers
+target_include_directories(aevrix_config_reload_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # Output state machine tests (Stage 4 - Response/Output State Machine)
 add_executable(aevrix_output_state_machine_tests
@@ -459,6 +481,9 @@ add_test(NAME aevrix_connection_nonblocking_tests COMMAND aevrix_connection_nonb
 
 # Register connection manager tests (Stage 2 - Event-Driven Refactor)
 add_test(NAME aevrix_connection_manager_tests COMMAND aevrix_connection_manager_tests)
+
+# Register configuration reload tests (Phase 24 - atomic config reload)
+add_test(NAME aevrix_config_reload_tests COMMAND aevrix_config_reload_tests)
 
 # Register output state machine tests (Stage 4 - Response/Output State Machine)
 add_test(NAME aevrix_output_state_machine_tests COMMAND aevrix_output_state_machine_tests)

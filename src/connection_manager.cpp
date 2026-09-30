@@ -7,18 +7,31 @@
 
 #include "aevrix/connection_manager.h"
 #include "aevrix/logger.h"
+#include "aevrix/server_config_store.h"
 #include <algorithm>
 #include <vector>
 
 namespace aevrix {
 
-ConnectionManager::ConnectionManager(const ServerConfig* config)
+ConnectionManager::ConnectionManager(const ServerConfig* config, const ServerConfigStore* store)
     : config_(config)
+    , store_(store)
     , next_connection_id_(1)
     , total_connections_(0) {
     
     aevrix::g_logger.info("ConnectionManager initialized with max_connections=" + 
-                         std::to_string(config_->max_connections()));
+                         std::to_string(config_view()->max_connections()) +
+                         (store_ != nullptr ? " (live: re-read after every config reload)" : ""));
+}
+
+std::shared_ptr<const ServerConfig> ConnectionManager::config_view() const {
+    if (store_ != nullptr) {
+        // Atomic snapshot: immutable for as long as this manager uses it, and a
+        // concurrent reload cannot tear the values it reads.
+        return store_->snapshot();
+    }
+    // Startup-only configuration: alias the borrowed object without owning it.
+    return std::shared_ptr<const ServerConfig>(std::shared_ptr<const ServerConfig>{}, config_);
 }
 
 ConnectionManager::~ConnectionManager() {
@@ -35,10 +48,10 @@ std::shared_ptr<Connection> ConnectionManager::register_connection(int fd) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Check if we're at capacity
-    if (connections_.size() >= static_cast<size_t>(config_->max_connections())) {
+    if (connections_.size() >= static_cast<size_t>(config_view()->max_connections())) {
         aevrix::g_logger.warn("ConnectionManager at capacity (" + 
                             std::to_string(connections_.size()) + "/" + 
-                            std::to_string(config_->max_connections()) + 
+                            std::to_string(config_view()->max_connections()) + 
                             "), rejecting new connection fd=" + std::to_string(fd));
         return nullptr;
     }
@@ -146,7 +159,7 @@ uint64_t ConnectionManager::total_connection_count() const {
 bool ConnectionManager::at_capacity() const {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    return connections_.size() >= static_cast<size_t>(config_->max_connections());
+    return connections_.size() >= static_cast<size_t>(config_view()->max_connections());
 }
 
 // =============================================================================

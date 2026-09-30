@@ -36,6 +36,10 @@
 
 namespace aevrix {
 
+// Phase 24: when present, timeouts/limits are re-read from an atomic snapshot
+// on every use so SIGHUP reloads take effect without a restart.
+class ServerConfigStore;
+
 /**
  * @brief Connection Manager for managing active client connections
  * 
@@ -61,8 +65,12 @@ public:
      * @brief Construct a ConnectionManager
      * 
      * @param config Server configuration with timeout and resource limits
+     * @param store Optional live configuration store (Phase 24). When given,
+     *        limits are read from the current snapshot instead of being frozen
+     *        at construction time.
      */
-    explicit ConnectionManager(const ServerConfig* config);
+    explicit ConnectionManager(const ServerConfig* config,
+                               const ServerConfigStore* store = nullptr);
 
     /**
      * @brief Destructor
@@ -270,6 +278,15 @@ private:
      */
     std::string get_timeout_reason(const Connection& conn) const;
 
+    /**
+     * @brief Current configuration view (Phase 24)
+     *
+     * Returns a snapshot from the store when one was provided, otherwise a
+     * non-owning view of the startup config. The snapshot is immutable and
+     * stays valid for the lifetime of the returned shared_ptr.
+     */
+    std::shared_ptr<const ServerConfig> config_view() const;
+
     // =========================================================================
     // Member Variables
     // =========================================================================
@@ -277,6 +294,7 @@ private:
     mutable std::mutex mutex_;  // Protects all member variables
     std::unordered_map<int, std::shared_ptr<Connection>> connections_;  // Active connections keyed by fd
     const ServerConfig* config_;  // Server configuration (pointer, not owned)
+    const ServerConfigStore* store_;  // Live config store for reloads (not owned, may be null)
     uint64_t next_connection_id_;  // Next connection ID to assign
     uint64_t total_connections_;  // Total connections created
 };

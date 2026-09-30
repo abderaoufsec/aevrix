@@ -6,6 +6,7 @@
 
 #include "aevrix/logger.h"
 #include <ctime>
+#include <cctype>
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -21,7 +22,47 @@ Logger::Logger(LogLevel level)
 }
 
 void Logger::set_level(LogLevel level) {
-    level_ = level;
+    level_.store(level, std::memory_order_relaxed);
+}
+
+bool Logger::level_from_string(const std::string& name, LogLevel& out) {
+    std::string lowered;
+    lowered.reserve(name.size());
+    for (char c : name) {
+        lowered += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    // Trim surrounding whitespace so "info " from a config file still parses.
+    const size_t first = lowered.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return false;
+    }
+    const size_t last = lowered.find_last_not_of(" \t");
+    lowered = lowered.substr(first, last - first + 1);
+
+    if (lowered == "debug") { out = LogLevel::DEBUG; return true; }
+    if (lowered == "info")  { out = LogLevel::INFO;  return true; }
+    if (lowered == "warn")  { out = LogLevel::WARN;  return true; }
+    if (lowered == "error" || lowered == "err") { out = LogLevel::ERR; return true; }
+    return false;
+}
+
+std::string Logger::level_to_string(LogLevel level) {
+    switch (level) {
+        case LogLevel::DEBUG: return "debug";
+        case LogLevel::INFO:  return "info";
+        case LogLevel::WARN:  return "warn";
+        case LogLevel::ERR:   return "error";
+        default: return "info";
+    }
+}
+
+bool Logger::set_level_from_string(const std::string& name) {
+    LogLevel parsed = LogLevel::INFO;
+    if (!level_from_string(name, parsed)) {
+        return false;
+    }
+    set_level(parsed);
+    return true;
 }
 
 void Logger::debug(const std::string& message) {
@@ -115,7 +156,8 @@ std::string Logger::level_name(LogLevel level) const {
 }
 
 bool Logger::should_log(LogLevel level) const {
-    return level >= level_;
+    return static_cast<int>(level) >=
+           static_cast<int>(level_.load(std::memory_order_relaxed));
 }
 
 void Logger::log(LogLevel level, const std::string& message) {

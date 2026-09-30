@@ -652,6 +652,45 @@ Rules that keep the layers separate:
   messages are echoed, Ping is answered with Pong, Close is echoed and
   the TCP connection drops once both Close frames exchanged.
 
+### 19.2 Configuration Reload (Phase 24)
+
+Reloads are copy-on-write, never in-place mutation. A reload parses and
+validates a candidate `ServerConfig` off to the side and publishes it
+with one atomic `std::shared_ptr<const ServerConfig>` store
+(`ServerConfigStore`). Readers hold snapshots, so an in-flight request
+keeps the generation it started with while later requests see the new
+one; a bad candidate is rejected and the live generation is untouched.
+
+``` text
+SIGHUP or POST /admin/reload-config
+     ↓
+parse candidate file (or ?path= override inside the config dir)
+     ↓
+validate (ranges, TLS material, document root)
+     ↓
+atomic shared_ptr swap + generation++ (ServerConfigStore::publish)
+     ↓
+log applied keys, hot keys, and restart-required keys
+```
+
+Rules that keep the reload safe:
+
+- The SIGHUP handler is signal-safe: it only flips an atomic flag and
+  writes to an eventfd the epoll loop already polls. All parsing,
+  validation, and the swap happen on the event-loop thread.
+- Hot vs restart-required is a property of *where a value is read*.
+  Values read per request/tick from a fresh snapshot (timeouts,
+  `max_connections`, `log_level`, `admin_api_enabled`) apply
+  immediately; values captured once at startup (`host`, `port`,
+  `workers`, TLS contexts/files, proxy routing targets) are logged as
+  needing a restart while the running values stay unchanged.
+- The admin surface is opt-in (`admin_api_enabled`, default off, 404
+  when disabled) and token-protected (`admin_token` via
+  `Authorization: Bearer` or `X-Aevrix-Token`, constant-time compare).
+  `GET /admin/config` masks the token; `POST /admin/reload-config`
+  only accepts absolute `?path=` overrides inside the configured
+  file's directory (no `..`), otherwise 400.
+
 ## 20. Graceful Shutdown
 
 Shutdown sequence:

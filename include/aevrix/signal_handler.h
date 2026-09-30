@@ -7,6 +7,7 @@
 // The signal handler implements:
 // - SIGINT (Ctrl+C) handling on Linux
 // - SIGTERM handling on Linux
+// - SIGHUP handling on Linux (Phase 24: configuration reload)
 // - Ctrl+C handling on Windows (SetConsoleCtrlHandler)
 //
 // Shutdown sequence:
@@ -73,6 +74,50 @@ public:
      */
     void request_shutdown();
 
+    // =========================================================================
+    // Configuration Reload (Phase 24)
+    // =========================================================================
+
+    /**
+     * @brief Check whether a configuration reload has been requested
+     *
+     * @return true when a reload flag is pending (does not clear it)
+     */
+    bool reload_requested() const;
+
+    /**
+     * @brief Check for a pending reload and clear the flag atomically
+     *
+     * Lets the event loop consume exactly one reload per SIGHUP burst.
+     *
+     * @return true if a reload was pending (and is now cleared)
+     */
+    bool consume_reload_request();
+
+    /**
+     * @brief Signal that a configuration reload was requested
+     *
+     * Async-signal-safe: it only flips an atomic flag and writes a wake-up byte
+     * to the descriptor registered with set_reload_notify_fd(). No logging and
+     * no allocation, because it runs inside the signal handler.
+     */
+    void request_reload();
+
+    /**
+     * @brief Register a descriptor to write to when a reload is requested
+     *
+     * On Linux this is an eventfd already registered with the epoll loop, so the
+     * event loop wakes up immediately instead of waiting for its next tick.
+     *
+     * @param fd Descriptor to write 8 bytes to, or -1 to disable
+     */
+    void set_reload_notify_fd(int fd);
+
+    /**
+     * @brief Descriptor currently registered for reload wake-ups (-1 if none)
+     */
+    int reload_notify_fd() const;
+
 private:
     /**
      * @brief Platform-specific signal setup
@@ -85,6 +130,8 @@ private:
     void cleanup_signals();
 
     std::atomic<bool> shutdown_requested_;
+    std::atomic<bool> reload_requested_{false};
+    std::atomic<int> reload_notify_fd_{-1};
     ShutdownCallback shutdown_callback_;
 };
 

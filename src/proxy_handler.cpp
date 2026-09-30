@@ -18,6 +18,7 @@
 
 #include "aevrix/logger.h"
 #include "aevrix/proxy_request_builder.h"
+#include "aevrix/server_config_store.h"
 
 namespace aevrix {
 
@@ -119,8 +120,10 @@ ProxyOutcome outcome_from_parser(const ProxyResponseParser& parser) {
 
 ProxyHandler::ProxyHandler(const ServerConfig& config,
                            EventLoop& event_loop,
-                           ProxyCompletion on_complete)
+                           ProxyCompletion on_complete,
+                           const ServerConfigStore* store)
     : config_(config)
+    , store_(store)
     , event_loop_(event_loop)
     , on_complete_(std::move(on_complete)) {
     // Pool policy comes from configuration so operators can bound descriptor
@@ -157,6 +160,26 @@ ProxyHandler::ProxyHandler(const ServerConfig& config,
 
 ProxyHandler::~ProxyHandler() {
     shutdown();
+}
+
+std::shared_ptr<const ServerConfig> ProxyHandler::cfg() const {
+    if (store_ != nullptr) {
+        return store_->snapshot();
+    }
+    // Startup-only configuration: alias the borrowed object without owning it.
+    return std::shared_ptr<const ServerConfig>(std::shared_ptr<const ServerConfig>{}, &config_);
+}
+
+void ProxyHandler::refresh_runtime_limits() {
+    if (store_ == nullptr) {
+        return;  // No live configuration to follow
+    }
+    const std::shared_ptr<const ServerConfig> current = cfg();
+    // Idle-pool bounds are safe to change at runtime: shrinking only affects
+    // connections that are not handed out, and in-flight requests keep the
+    // budgets they started with.
+    pool_.set_max_idle_per_target(current->proxy_max_idle_connections());
+    pool_.set_idle_timeout_ms(current->proxy_idle_timeout_ms());
 }
 
 // =============================================================================
@@ -236,8 +259,13 @@ bool ProxyHandler::start(uint64_t client_connection_id,
     options.forwarded_proto = config_.tls_enabled() ? "https" : "http";
     options.client_ip = peer_address(client_fd);
 
+    // Phase 24: budgets come from the live configuration, so a reload changes
+    // them for the requests started after it. Routing above stays on the
+    // startup config because the upstream target was resolved at startup.
+    const std::shared_ptr<const ServerConfig> budget = cfg();
+
     ProxyResponseParser::Config parser_config;
-    parser_config.max_body_bytes = config_.proxy_max_response_bytes();
+    parser_config.max_body_bytes = budget->proxy_max_response_bytes();
     parser_config.request_was_head = (request.method() == http::HttpMethod::HEAD);
 
     PendingRequest pending;
@@ -252,8 +280,8 @@ bool ProxyHandler::start(uint64_t client_connection_id,
     pending.bytes_written = 0;
     pending.generation = next_generation_++;
     pending.head_request = parser_config.request_was_head;
-    pending.deadline = deadline_after(acquired.reused ? config_.proxy_read_timeout_ms()
-                                                      : config_.proxy_connect_timeout_ms());
+    pending.deadline = deadline_after(acquired.reused ? budget->proxy_read_timeout_ms()
+                                                      : budget->proxy_connect_timeout_ms());
 
     // A fresh socket needs EPOLLOUT for the connect handshake; a pooled socket
     // is already connected, so it needs both directions right away.
@@ -388,7 +416,7 @@ bool ProxyHandler::finish_connect(PendingRequest& request) {
     }
 
     request.phase = Phase::Writing;
-    request.deadline = deadline_after(config_.proxy_read_timeout_ms());
+    request.deadline = deadline_after(cfg()->proxy_read_timeout_ms());
     return true;
 }
 
@@ -426,7 +454,7 @@ bool ProxyHandler::flush_request(PendingRequest& request) {
     // response is interesting from now on.
     request.request_bytes.clear();
     request.phase = Phase::Reading;
-    request.deadline = deadline_after(config_.proxy_read_timeout_ms());
+    request.deadline = deadline_after(cfg()->proxy_read_timeout_ms());
 
     if (!event_loop_.modify_fd(request.upstream_fd,
                                static_cast<uint32_t>(EPOLLIN | EPOLLRDHUP))) {

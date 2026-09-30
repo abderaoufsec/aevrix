@@ -94,6 +94,9 @@ using ProxyCompletion = std::function<void(uint64_t client_connection_id, ProxyO
 /**
  * @brief Reverse-proxy request handler
  */
+// Phase 24: live configuration store, so proxy budgets follow reloads.
+class ServerConfigStore;
+
 class ProxyHandler {
 public:
     /**
@@ -105,12 +108,27 @@ public:
      * @param config Server configuration (proxy settings are read here)
      * @param event_loop The event loop used for upstream descriptors
      * @param on_complete Callback invoked once per request with the outcome
+     * @param store Optional live configuration store (Phase 24). Budgets
+     *        (connect/read timeouts, response cap, pool limits) are then read
+     *        from the current snapshot, so a reload changes them for the
+     *        requests started after it. Routing (proxy_pass/prefix) and TLS
+     *        stay taken from the startup config: they need a restart.
      */
-    ProxyHandler(const ServerConfig& config, EventLoop& event_loop, ProxyCompletion on_complete);
+    ProxyHandler(const ServerConfig& config, EventLoop& event_loop, ProxyCompletion on_complete,
+                 const ServerConfigStore* store = nullptr);
     ~ProxyHandler();
 
     ProxyHandler(const ProxyHandler&) = delete;
     ProxyHandler& operator=(const ProxyHandler&) = delete;
+
+    /**
+     * @brief Re-apply reloadable upstream-pool limits from the live config
+     *
+     * Called after a successful SIGHUP/admin reload so the connection pool
+     * bounds follow the new configuration without restarting the process.
+     * No-op when no store was provided or the proxy is not configured.
+     */
+    void refresh_runtime_limits();
 
     // =========================================================================
     // Routing
@@ -222,11 +240,21 @@ private:
 
     std::chrono::steady_clock::time_point deadline_after(uint64_t timeout_ms) const;
 
+    /**
+     * @brief Current configuration view (Phase 24)
+     *
+     * Snapshot from the live store when available, otherwise a non-owning view
+     * of the startup config. Used for budgets only: routing and TLS come from
+     * the startup config because those need a restart.
+     */
+    std::shared_ptr<const ServerConfig> cfg() const;
+
     // =========================================================================
     // State
     // =========================================================================
 
     const ServerConfig& config_;
+    const ServerConfigStore* store_ = nullptr;  // Live config store for reloads (not owned)
     EventLoop& event_loop_;
     ProxyCompletion on_complete_;
     UpstreamPool pool_;

@@ -97,6 +97,8 @@ std::string ServerConfig::summary() const {
     oss << "  Port: " << port_ << "\n";
     oss << "  Workers: " << workers_ << "\n";
     oss << "  Document root: " << document_root_ << "\n";
+    oss << "  Log level: " << log_level_ << "\n";
+    oss << "  Admin API: " << (admin_api_enabled_ ? "enabled" : "disabled") << "\n";
     oss << "  Header timeout: " << header_timeout_ms_ << " ms\n";
     oss << "  Body timeout: " << body_timeout_ms_ << " ms\n";
     oss << "  Keep-alive timeout: " << keep_alive_timeout_ms_ << " ms\n";
@@ -221,6 +223,24 @@ void ServerConfig::load_from_parser(const ConfigParser& parser) {
         parser.get_int("websocket_ping_interval_ms", static_cast<int64_t>(websocket_ping_interval_ms_)));
     websocket_allowed_origins_ = split_csv(
         parser.get_string("websocket_allowed_origins", join_csv(websocket_allowed_origins_)));
+
+    // Phase 24: runtime/observability keys. log_level is validated below so a
+    // bad value rejects the whole reload instead of silently keeping the old
+    // verbosity.
+    log_level_ = parser.get_string("log_level", log_level_);
+    admin_api_enabled_ = parser.get_bool("admin_api_enabled", admin_api_enabled_);
+    admin_token_ = parser.get_string("admin_token", admin_token_);
+
+    // Validate the log level name (Phase 24)
+    {
+        LogLevel parsed = LogLevel::INFO;
+        if (!Logger::level_from_string(log_level_, parsed)) {
+            throw std::runtime_error("Invalid log_level: '" + log_level_
+                                     + "' (expected debug, info, warn or error)");
+        }
+        // Store the canonical spelling so reload diffs ignore case/space.
+        log_level_ = Logger::level_to_string(parsed);
+    }
 
     // A proxied prefix must be an absolute path, otherwise it can never match a
     // request target.

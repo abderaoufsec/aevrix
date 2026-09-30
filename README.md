@@ -8,11 +8,14 @@ Aevrix is a Linux-first HTTP/1.1 server designed around explicit ownership, non-
 
 ## Status
 
-**Status:** Implementation in progress — Stages 1–7 and Phase 21 (TLS) complete
+**Status:** Implementation in progress — Stages 1–7 and Phases 21–24 complete
 
 Aevrix has completed:
 - Stages 1–7: Nonblocking event-driven foundation, HTTP parser, response state machine, WorkerPool, timeout enforcement, static-file security
 - Phase 21: TLS/HTTPS support with OpenSSL
+- Phase 22: Reverse-proxy transport (forwarding, pooling, timeouts)
+- Phase 23: WebSocket upgrade (RFC 6455 handshake + framing)
+- Phase 24: Atomic configuration reload (SIGHUP + admin API)
 
 See the [implementation roadmap](docs/IMPLEMENTATION_ROADMAP.md) for detailed phase information.
 

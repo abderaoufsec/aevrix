@@ -7,6 +7,7 @@
 #include "aevrix/signal_handler.h"
 #include "aevrix/logger.h"
 #include <csignal>
+#include <cstdint>
 #include <iostream>
 
 #ifdef _WIN32
@@ -14,7 +15,6 @@
 #else
 #include <unistd.h>
 #endif
-
 namespace aevrix {
 
 // Global signal handler instance
@@ -35,10 +35,22 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrl_type) {
     return FALSE;  // Pass to default handler
 }
 #else
-// Unix/Linux signal handler
+// Unix/Linux signal handler.
+// Runs in signal context, so it may only touch async-signal-safe state: the
+// two atomics below and write() (see request_reload()).
 static void SignalHandlerFunc(int signal) {
-    (void)signal;  // Suppress unused parameter warning
-    if (g_signal_handler_ptr) {
+    if (g_signal_handler_ptr == nullptr) {
+        return;
+    }
+#ifdef SIGHUP
+    if (signal == SIGHUP) {
+        // Phase 24: configuration reload request. The event loop performs the
+        // actual parse/validate/swap outside this signal context.
+        g_signal_handler_ptr->request_reload();
+        return;
+    }
+#endif
+    if (signal == SIGINT || signal == SIGTERM) {
         g_signal_handler_ptr->request_shutdown();
     }
 }
@@ -77,6 +89,46 @@ void SignalHandler::request_shutdown() {
     }
 }
 
+// =============================================================================
+// Configuration Reload (Phase 24)
+// =============================================================================
+
+bool SignalHandler::reload_requested() const {
+    return reload_requested_.load(std::memory_order_acquire);
+}
+
+bool SignalHandler::consume_reload_request() {
+    bool expected = true;
+    return reload_requested_.compare_exchange_strong(expected, false,
+                                                     std::memory_order_acq_rel);
+}
+
+void SignalHandler::request_reload() {
+    // Async-signal-safe by construction: atomic store + write(). Everything
+    // expensive (file I/O, parse, validate, swap) happens on the event loop.
+    reload_requested_.store(true, std::memory_order_release);
+
+    const int fd = reload_notify_fd_.load(std::memory_order_acquire);
+    if (fd >= 0) {
+#ifdef _WIN32
+        // No eventfd on Windows: the flag above is polled by the loop instead.
+        (void)fd;
+#else
+        const uint64_t wake = 1;
+        const ssize_t ignored = ::write(fd, &wake, sizeof(wake));
+        (void)ignored;  // Best effort: a full counter still leaves the flag set
+#endif
+    }
+}
+
+void SignalHandler::set_reload_notify_fd(int fd) {
+    reload_notify_fd_.store(fd, std::memory_order_release);
+}
+
+int SignalHandler::reload_notify_fd() const {
+    return reload_notify_fd_.load(std::memory_order_acquire);
+}
+
 void SignalHandler::setup_signals() {
 #ifdef _WIN32
     // Windows: Set console control handler for Ctrl+C
@@ -97,6 +149,13 @@ void SignalHandler::setup_signals() {
     if (sigaction(SIGTERM, &sa, nullptr) < 0) {
         aevrix::g_logger.error("Failed to set SIGTERM handler");
     }
+
+    // Phase 24: SIGHUP asks for a configuration reload (nginx-style).
+    // SA_RESTART keeps unrelated blocking calls from failing with EINTR.
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGHUP, &sa, nullptr) < 0) {
+        aevrix::g_logger.error("Failed to set SIGHUP handler");
+    }
 #endif
 }
 
@@ -113,6 +172,7 @@ void SignalHandler::cleanup_signals() {
 
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGHUP, &sa, nullptr);
 #endif
 }
 

@@ -79,6 +79,30 @@ Tests path security for preventing directory traversal attacks:
 
 **Build Target**: Currently disabled
 
+#### Configuration Reload Tests (`tests/config_reload_tests.cpp`)
+
+Tests the Phase 24 atomic configuration store (`ServerConfigStore`) without
+touching the network — reloads go through
+`try_reload_from_parser()` / `try_reload()` on scratch files:
+- Initial publish + snapshot/generation semantics
+- Held snapshots surviving a reload (old generation stays alive by refcount)
+- Hot vs restart-required classification (`diff_keys` / `is_restart_required`)
+- All-or-nothing rejection of invalid values and of missing files
+- File-driven reload (`try_reload` on a temp file)
+- Concurrent snapshots during reloads (ThreadSanitizer-clean)
+- `ConnectionManager` following reloads via the store snapshot
+- Log-level parsing + signal-handler reload flag / eventfd wake-up
+- `flatten` / `diff` / `describe` helpers
+
+**Build Target**: `aevrix_config_reload_tests`
+
+**Run Command**: `./build/aevrix_config_reload_tests`
+
+Live end-to-end coverage lives in `tests/smoke/smoke_reload.sh`: SIGHUP hot
+swap, restart-only warnings, invalid-config rejection, token-protected
+`/admin/config` + `/admin/reload-config` (401/400/404 paths), and clean
+SIGTERM shutdown.
+
 ### Running All Tests
 
 To run all registered tests:

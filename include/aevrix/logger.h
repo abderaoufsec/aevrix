@@ -29,6 +29,7 @@
 #include <chrono>
 #include <iomanip>
 #include <cstdint>
+#include <atomic>
 
 namespace aevrix {
 
@@ -72,11 +73,39 @@ public:
     void set_level(LogLevel level);
 
     /**
+     * @brief Parse a log level name (case-insensitive)
+     *
+     * Accepted names: debug, info, warn, error (also "err"). Used by the
+     * Phase 24 configuration reload path, where the level arrives as text.
+     *
+     * @param name Level name to parse
+     * @param out Receives the parsed level when true is returned
+     * @return true when the name maps to a known level
+     */
+    static bool level_from_string(const std::string& name, LogLevel& out);
+
+    /**
+     * @brief Render a log level as its configuration name
+     *
+     * @param level Level to render
+     * @return std::string Lowercase name ("debug", "info", "warn", "error")
+     */
+    static std::string level_to_string(LogLevel level);
+
+    /**
+     * @brief Set the log level from its configuration name
+     *
+     * @param name Level name (case-insensitive)
+     * @return true when applied, false when the name is unknown (level kept)
+     */
+    bool set_level_from_string(const std::string& name);
+
+    /**
      * @brief Get the current log level
-     * 
+     *
      * @return LogLevel Current log level
      */
-    LogLevel level() const { return level_; }
+    LogLevel level() const { return level_.load(std::memory_order_relaxed); }
 
     /**
      * @brief Log a DEBUG message
@@ -176,7 +205,10 @@ private:
      */
     void log(LogLevel level, const std::string& message);
 
-    LogLevel level_;
+    // Atomic: the level is readable from every thread (worker threads log
+    // too) while Phase 24 config reloads may change it from the event-loop
+    // thread, so a plain field would be a data race.
+    std::atomic<LogLevel> level_;
 };
 
 /**

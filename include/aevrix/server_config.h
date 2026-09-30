@@ -571,6 +571,44 @@ public:
      */
     void set_websocket_allowed_origins(std::vector<std::string> origins) { websocket_allowed_origins_ = std::move(origins); }
 
+    // =========================================================================
+    // Runtime / Observability Configuration (Phase 24)
+    // =========================================================================
+
+    /**
+     * @brief Log level name ("debug", "info", "warn", "error")
+     *
+     * Applied at startup and re-applied on every successful reload, so the
+     * verbosity of a running server can be raised for diagnosis and lowered
+     * again without restarting it.
+     */
+    const std::string& log_level() const { return log_level_; }
+
+    /**
+     * @brief Set the log level name (validated by load_from_parser)
+     */
+    void set_log_level(std::string level) { log_level_ = std::move(level); }
+
+    /**
+     * @brief Whether the admin configuration endpoints are exposed
+     */
+    bool admin_api_enabled() const { return admin_api_enabled_; }
+
+    /**
+     * @brief Enable or disable the admin configuration endpoints
+     */
+    void set_admin_api_enabled(bool enabled) { admin_api_enabled_ = enabled; }
+
+    /**
+     * @brief Bearer token required by the admin endpoints (empty = no auth)
+     */
+    const std::string& admin_token() const { return admin_token_; }
+
+    /**
+     * @brief Set the bearer token for the admin endpoints
+     */
+    void set_admin_token(std::string token) { admin_token_ = std::move(token); }
+
 private:
     // =========================================================================
     // Timeout Configuration (milliseconds)
@@ -633,6 +671,14 @@ private:
     uint64_t websocket_close_timeout_ms_ = 5000;            // Close handshake budget
     uint64_t websocket_ping_interval_ms_ = 0;               // 0 disables server pings
     std::vector<std::string> websocket_allowed_origins_;    // Empty = allow any
+
+    // =========================================================================
+    // Runtime / Observability Configuration (Phase 24)
+    // =========================================================================
+
+    std::string log_level_ = "info";         // Active log level name
+    bool admin_api_enabled_ = false;         // Expose /admin/* reload endpoints
+    std::string admin_token_;                // Bearer token (empty = no auth)
 };
 
 } // namespace aevrix
