@@ -5,60 +5,111 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
+    name: Build & Test (TLS ON)
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build
-    
+        sudo apt-get install -y cmake ninja-build g++ libssl-dev openssl
+
+    - name: Show toolchain versions
+      run: |
+        cmake --version | head -1
+        g++ --version | head -1
+        openssl version
+
+    # GoogleTest is delivered by CMakeLists.txt: find_package(GTest) first, then
+    # a pinned FetchContent fallback (googletest v1.15.2). No `libgtest-dev`
+    # package or manual /usr/src/gtest build is required; only network access
+    # during configure.
+
     - name: Configure (Debug)
       run: cmake --preset debug
-    
+
     - name: Build (Debug)
       run: cmake --build --preset debug
-    
+
     - name: Test (Debug)
       run: ctest --preset debug --output-on-failure
-    
+
     - name: Configure (Release)
       run: cmake --preset release
-    
+
     - name: Build (Release)
       run: cmake --build --preset release
-    
+
     - name: Test (Release)
       run: ctest --preset release --output-on-failure
 
-  sanitizers:
+  build-notls:
+    name: Build & Test (TLS OFF)
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build
-    
-    - name: Configure with AddressSanitizer
+        sudo apt-get install -y cmake ninja-build g++ libssl-dev
+
+    - name: Configure (TLS disabled)
+      run: cmake -S . -B build-notls -DCMAKE_BUILD_TYPE=Debug -DENABLE_TLS=OFF
+
+    - name: Build (TLS disabled)
+      run: cmake --build build-notls -j"$(nproc)"
+
+    - name: Test (TLS disabled)
+      run: ctest --test-dir build-notls --output-on-failure
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ address, undefined, thread ]
+        include:
+          - sanitizer: address
+            flags: -fsanitize=address -fno-omit-frame-pointer -g
+          - sanitizer: undefined
+            flags: -fsanitize=undefined -fno-sanitize-recover=all -g
+          - sanitizer: thread
+            flags: -fsanitize=thread -g
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
       run: |
-        cmake -B build/san \
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++ libssl-dev openssl
+
+    - name: Configure with ${{ matrix.sanitizer }}
+      run: |
+        cmake -S . -B build/san \
           -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+          -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
+          -DCMAKE_C_FLAGS="${{ matrix.flags }}" \
           -G Ninja
-    
-    - name: Build with AddressSanitizer
-      run: cmake --build build/san
-    
-    - name: Test with AddressSanitizer
+
+    - name: Build with ${{ matrix.sanitizer }}
+      run: cmake --build build/san -j"$(nproc)"
+
+    - name: Test with ${{ matrix.sanitizer }}
       run: ctest --test-dir build/san --output-on-failure
       env:
+        # Each sanitizer reads only the variable that applies to it.
         ASAN_OPTIONS: detect_leaks=1
+        UBSAN_OPTIONS: print_stacktrace=1
+        TSAN_OPTIONS: halt_on_error=1
+

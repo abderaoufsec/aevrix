@@ -22,6 +22,8 @@ careful, well-scoped code changes.
    cmake --build build -j$(nproc)
    ctest --test-dir build --output-on-failure
    ```
+   GoogleTest for the TLS suites is resolved automatically (`find_package`,
+   then a pinned FetchContent fallback), so no extra package install is needed.
    Also build once with `-DENABLE_TLS=OFF` if you touched TLS-gated code.
 3. Run the smoke suite when you touch runtime behaviour:
    `bash tests/smoke/run_all.sh` (needs `build/aevrix`).
@@ -60,8 +62,9 @@ careful, well-scoped code changes.
 1. Fill in `.github/pull_request_template.md` completely (description,
    testing, docs, breaking-change notice).
 2. Keep PRs small and single-purpose; separate refactors from fixes.
-3. CI must pass (Debug + Release + ASan). A maintainer reviews for
-   correctness, style, tests, and docs.
+3. CI must pass (Debug + Release, the TLS-OFF build, and the
+   ASan/UBSan/TSan matrix). A maintainer reviews for correctness, style,
+   tests, and docs.
 4. Security fixes may be handled privately — see
    [SECURITY.md](SECURITY.md). **Never post a PoC exploit in a public PR.**
 

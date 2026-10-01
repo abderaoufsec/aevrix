@@ -54,6 +54,71 @@ else()
 endif()
 
 # =============================================================================
+# GoogleTest Dependency (GTest)
+# =============================================================================
+# NOTE: This block must stay BEFORE the "Compiler Warning Configuration"
+# section below. The project sets strict global warnings (-Werror etc.) via
+# add_compile_options(), and directory compile options propagate into
+# FetchContent sub-builds. Configuring googletest first keeps its own targets
+# free of our -Werror flags.
+#
+# TLS unit tests use GoogleTest (#include <gtest/gtest.h>). CI runners
+# (ubuntu-latest) do not ship GTest headers, so a bare `find_package(GTest)`
+# fails there with "gtest/gtest.h: No such file or directory".
+#
+# Strategy (preferred: self-contained, works on CI + local checkouts):
+#   1. Try `find_package(GTest QUIET)` first so system packages are reused
+#      when present (faster configure, distro-patched builds).
+#   2. Fall back to CMake FetchContent to download and build the pinned
+#      googletest release. This needs only network access at configure time;
+#      no `apt install libgtest-dev` or manual `cmake --build` of /usr/src/gtest.
+#
+# To force the fallback (e.g. hermetic/offline-mirror testing):
+#   cmake -DAEVRIX_USE_SYSTEM_GTEST=OFF ...
+# To force system-only (fail fast when GTest is absent):
+#   cmake -DAEVRIX_FETCH_GTEST=OFF ...
+# =============================================================================
+option(AEVRIX_USE_SYSTEM_GTEST "Prefer system-installed GTest when available" ON)
+option(AEVRIX_FETCH_GTEST "Fetch GoogleTest via FetchContent when not found on the system" ON)
+
+if(AEVRIX_USE_SYSTEM_GTEST)
+    find_package(GTest QUIET)
+endif()
+
+if(NOT GTest_FOUND AND AEVRIX_FETCH_GTEST)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
+    include(FetchContent)
+    # Keep googletest's own build quiet and consistent with the parent project:
+    # shared CRT on Windows (avoids LNK2038), no gmock, no install rules.
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
+        URL_HASH SHA256=7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926
+    )
+    FetchContent_MakeAvailable(googletest)
+    # The legacy FindGTest module provides GTest::GTest / GTest::Main
+    # (capitalized), while the FetchContent build provides the real targets
+    # `gtest` / `gtest_main` (plus upstream's own GTest::gtest aliases).
+    # Alias targets cannot point at other ALIAS targets, so bind the
+    # capitalized names to the real targets. All test targets below then link
+    # uniformly against GTest::GTest / GTest::Main.
+    if(NOT TARGET GTest::GTest AND TARGET gtest)
+        add_library(GTest::GTest ALIAS gtest)
+    endif()
+    if(NOT TARGET GTest::Main AND TARGET gtest_main)
+        add_library(GTest::Main ALIAS gtest_main)
+    endif()
+    # Mark as found so the TLS test targets below are configured.
+    set(GTest_FOUND TRUE)
+    message(STATUS "GTest provided via FetchContent (googletest v1.15.2)")
+endif()
+
+# =============================================================================
 # Compiler Warning Configuration
 # =============================================================================
 # Enable strict compiler warnings and treat them as errors to enforce code quality
@@ -121,12 +186,12 @@ endif()
 # =============================================================================
 enable_testing()
 
-# Find GTest for unit tests (TLS tests use gtest; other tests use custom harness)
-find_package(GTest QUIET)
 if(GTest_FOUND)
-    message(STATUS "GTest found: ${GTEST_VERSION}")
+    message(STATUS "GTest found - TLS unit tests (GTest-based) will be built")
 else()
-    message(STATUS "GTest not found - TLS tests will use custom test harness fallback")
+    message(WARNING "GTest not found and AEVRIX_FETCH_GTEST is OFF - "
+                    "GTest-based TLS test targets will be skipped. "
+                    "Re-enable AEVRIX_FETCH_GTEST or install GTest.")
 endif()
 
 # =============================================================================
@@ -533,7 +598,11 @@ endif()
 add_test(NAME aevrix_websocket_handshake_tests COMMAND aevrix_websocket_handshake_tests)
 
 # Register TLS tests (Phase 21)
-if(ENABLE_TLS AND OPENSSL_FOUND)
+# These tests are GTest-based, so they need both OpenSSL and GoogleTest.
+# GTest_FOUND is guaranteed on CI/local builds via find_package + FetchContent
+# fallback above; the guard keeps configuration working when GTest is
+# deliberately unavailable (AEVRIX_USE_SYSTEM_GTEST=OFF + AEVRIX_FETCH_GTEST=OFF).
+if(ENABLE_TLS AND OPENSSL_FOUND AND GTest_FOUND)
     add_executable(aevrix_tls_context_tests
         tests/tls_context_tests.cpp
         src/tls_context.cpp
@@ -541,9 +610,9 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
     )
     target_include_directories(aevrix_tls_context_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
     target_compile_definitions(aevrix_tls_context_tests PRIVATE AEVRIX_ENABLE_TLS)
-    if(GTest_FOUND)
-        target_link_libraries(aevrix_tls_context_tests PRIVATE GTest::GTest GTest::Main)
-    endif()
+    # GTest::GTest / GTest::Main resolve to the system package or to the
+    # FetchContent aliases declared above -- always present when GTest_FOUND.
+    target_link_libraries(aevrix_tls_context_tests PRIVATE GTest::GTest GTest::Main)
     target_link_libraries(aevrix_tls_context_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_context_tests COMMAND aevrix_tls_context_tests)
 
@@ -555,9 +624,7 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
     )
     target_include_directories(aevrix_tls_connection_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
     target_compile_definitions(aevrix_tls_connection_tests PRIVATE AEVRIX_ENABLE_TLS)
-    if(GTest_FOUND)
-        target_link_libraries(aevrix_tls_connection_tests PRIVATE GTest::GTest GTest::Main)
-    endif()
+    target_link_libraries(aevrix_tls_connection_tests PRIVATE GTest::GTest GTest::Main)
     target_link_libraries(aevrix_tls_connection_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_connection_tests COMMAND aevrix_tls_connection_tests)
 
@@ -569,15 +636,37 @@ if(ENABLE_TLS AND OPENSSL_FOUND)
     )
     target_include_directories(aevrix_tls_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
     target_compile_definitions(aevrix_tls_integration_tests PRIVATE AEVRIX_ENABLE_TLS)
-    if(GTest_FOUND)
-        target_link_libraries(aevrix_tls_integration_tests PRIVATE GTest::GTest GTest::Main)
-    endif()
+    target_link_libraries(aevrix_tls_integration_tests PRIVATE GTest::GTest GTest::Main)
     target_link_libraries(aevrix_tls_integration_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     add_test(NAME aevrix_tls_integration_tests COMMAND aevrix_tls_integration_tests)
 endif()
 
 # Register router tests (enabled in Phase 16)
 add_test(NAME aevrix_router_tests COMMAND aevrix_router_tests)
+
+# =============================================================================
+# Keep Assertions Active In Test Builds
+# =============================================================================
+# Most test suites are built on <cassert> (a few use the in-file TEST_ASSERT
+# macro). Release builds define NDEBUG, which turns every assert() into a
+# no-op. That both silently disables the checks and breaks the build under
+# -Werror, because variables only consumed by an assert() become
+# "unused"/"used uninitialized" (e.g. tests/http_cache_tests.cpp).
+#
+# Undefining NDEBUG for test targets only keeps Release runs checking exactly
+# what Debug runs check. The aevrix server binary keeps NDEBUG (standard
+# production behaviour). Must run after all test targets are declared.
+# =============================================================================
+get_property(aevrix_directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(aevrix_target IN LISTS aevrix_directory_targets)
+    if(aevrix_target MATCHES "_tests$")
+        if(MSVC)
+            target_compile_options(${aevrix_target} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${aevrix_target} PRIVATE -UNDEBUG)
+        endif()
+    endif()
+endforeach()
 
 # =============================================================================
 # Benchmark Targets (Phase 18)

@@ -103,24 +103,45 @@ swap, restart-only warnings, invalid-config rejection, token-protected
 `/admin/config` + `/admin/reload-config` (401/400/404 paths), and clean
 SIGTERM shutdown.
 
+### Prerequisites
+
+- CMake ≥ 3.16, a C++20 compiler (GCC/Clang/MinGW), and — for TLS builds —
+  OpenSSL development headers (`libssl-dev` on Debian/Ubuntu).
+- The `tls_*` suites use GoogleTest (`#include <gtest/gtest.h>`). CMake wires
+  this up automatically: it tries `find_package(GTest)` first and otherwise
+  downloads a pinned googletest release via FetchContent (network access needed
+  at configure time only). No `libgtest-dev` package or manual `/usr/src/gtest`
+  build is required. Escape hatches: `-DAEVRIX_USE_SYSTEM_GTEST=OFF` (always
+  use the fetched copy) and `-DAEVRIX_FETCH_GTEST=OFF` (system copy only).
+
 ### Running All Tests
 
-To run all registered tests:
-
 ```bash
-# Build tests
-cmake --build --preset debug-win
+# Configure + build + run every registered test (Linux/macOS presets use Ninja)
+cmake --preset debug
+cmake --build --preset debug -j"$(nproc)"
+ctest --preset debug --output-on-failure
 
-# Run all tests via CTest
-ctest --test-dir build/debug --output-on-failure
+# Release run: `-UNDEBUG` is applied to test targets, so the <cassert> checks
+# still execute under -O3 even though the server binary is built with NDEBUG.
+cmake --preset release && cmake --build --preset release && ctest --preset release
+
+# TLS-disabled build (TLS suites are skipped, 17 tests remain)
+cmake -S . -B build-notls -DENABLE_TLS=OFF -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-notls -j"$(nproc)" && ctest --test-dir build-notls
+
+# Sanitizers
+cmake --preset asan && cmake --build --preset asan && ctest --preset asan
+cmake --preset ubsan && cmake --build --preset ubsan && ctest --preset ubsan
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
 ```
 
-To run individual test executables:
+To run individual test executables (paths shown for the `build/` Makefile dir):
 
 ```bash
-./build/debug/aevrix_http_tests.exe
-./build/debug/aevrix_http_request_tests.exe
-./build/debug/aevrix_router_tests.exe
+./build/aevrix_http_tests
+./build/aevrix_http_request_tests
+./build/aevrix_router_tests
 ```
 
 ## Phase 16 Test Pyramid Status

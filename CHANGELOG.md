@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- CI: TLS test suites no longer fail with `gtest/gtest.h: No such file or
+  directory`. `CMakeLists.txt` now tries `find_package(GTest)` and falls back
+  to a pinned FetchContent build of googletest v1.15.2, so the `GTest::GTest` /
+  `GTest::Main` targets exist on GitHub-hosted runners and clean checkouts
+  without installing `libgtest-dev`. Opt out with
+  `-DAEVRIX_FETCH_GTEST=OFF` (system GTest only) or
+  `-DAEVRIX_USE_SYSTEM_GTEST=OFF` (always use the fetched copy).
+- Release builds: `NDEBUG` is now undefined for test targets (`-UNDEBUG`) so
+  `<cassert>` checks keep running under `-O3`. Previously the Release build
+  failed under `-Werror` (`unused variable`, `used uninitialized`) because
+  assert-only variables were compiled out — and the assertions themselves were
+  silently disabled in Release runs. The `aevrix` server binary still builds
+  with `NDEBUG`.
+
+### Changed
+- CI workflow reorganized into three jobs: `build-and-test` (TLS ON, Debug and
+  Release presets), `build-notls` (`-DENABLE_TLS=OFF`), and a `sanitizers`
+  matrix (AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer).
+  `workflow_dispatch` was added for manual runs, and `libssl-dev`/`openssl`
+  are installed explicitly.
+- Docs: `docs/TESTING.md` documents the GoogleTest bootstrap, the `-UNDEBUG`
+  test rule, and current preset commands; `CONTRIBUTING.md` mirrors the
+  expanded CI gate.
+
 ## [1.0.0] - 2026-09-30
 
 Stable v1.0.0 release. Definition of Done verified: 20/20 CTest (TLS-ON),
