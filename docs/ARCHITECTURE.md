@@ -1,894 +1,148 @@
-# Aevrix Web Server --- Architecture
+# Architecture
 
-## 1. Architectural Goal
+Aevrix is one process: a single event-loop thread that owns every socket, one
+worker pool that only reads files, and components that keep those two apart.
+This file describes what exists in the tree today.
 
-Aevrix is a Linux-first C++20 HTTP/1.1 server designed around:
-
--   explicit ownership
--   non-blocking network I/O
--   a single event loop initially
--   connection state machines
--   bounded work queues
--   strict protocol parsing
--   isolated filesystem/application work
--   testable components
-
-The architecture deliberately separates **transport**, **protocol**,
-**application**, and **operational** concerns.
-
-## 2. High-Level Architecture
-
-``` text
-                    ┌──────────────────────┐
-                    │       Clients        │
-                    │ browsers / curl / LB │
-                    └──────────┬───────────┘
-                               │ TCP
-                               ▼
-                    ┌──────────────────────┐
-                    │     TCP Listener     │
-                    │ socket/bind/listen   │
-                    └──────────┬───────────┘
-                               │ accept
-                               ▼
-                    ┌──────────────────────┐
-                    │     Event Loop       │
-                    │        epoll         │
-                    └──────────┬───────────┘
-                               │ events
-                               ▼
-                    ┌──────────────────────┐
-                    │ Connection Manager   │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Connection State     │
-                    │ Machine              │
-                    └──────────┬───────────┘
-                               │ bytes
-                               ▼
-                    ┌──────────────────────┐
-                    │ HTTP/1.1 Parser      │
-                    └──────────┬───────────┘
-                               │ Request
-                               ▼
-                    ┌──────────────────────┐
-                    │ Router / Dispatcher  │
-                    └──────────┬───────────┘
-                               │
-               ┌───────────────┴───────────────┐
-               ▼                               ▼
-      ┌─────────────────┐             ┌─────────────────┐
-      │ Static File     │             │ Application      │
-      │ Resolver        │             │ Handler          │
-      └────────┬────────┘             └────────┬────────┘
-               │                               │
-               └───────────────┬───────────────┘
-                               ▼
-                    ┌──────────────────────┐
-                    │ Response Builder     │
-                    └──────────┬───────────┘
-                               ▼
-                    ┌──────────────────────┐
-                    │ Write Buffer /       │
-                    │ Output State         │
-                    └──────────┬───────────┘
-                               ▼
-                              TCP
+```text
+        accept            epoll                per-connection state
+clients ------> TcpListener --> EventLoop --> Connection (parser, buffers,
+                                     |          deadlines, TLS, WebSocket)
+                                     |
+                                     +--> Router        (method + target)
+                                     +--> WebSocket     (upgrade + frames)
+                                     +--> ProxyHandler  (pooled upstreams)
+                                     +--> WorkerPool    (file reads)
+                                              |
+                                     completion eventfd (results back to loop)
 ```
 
-## 3. Process Model
-
-### Initial model
-
-One process:
-
-``` text
-aevrix
- └── event loop
-      ├── listener
-      ├── connection 1
-      ├── connection 2
-      └── connection N
-```
-
-This keeps debugging and learning straightforward.
-
-### Later model
-
-If experiments show a benefit:
-
-``` text
-              master
-                │
-       ┌────────┼────────┐
-       ▼        ▼        ▼
-    worker    worker    worker
-       │        │        │
-     epoll    epoll    epoll
-```
-
-Do not introduce multi-process complexity before measurements justify
-it.
-
-NGINX is a useful reference here: it separates a master process from
-worker processes and uses event-driven processing in workers.
-
-## 4. Threading Model
-
-The first serious runtime should be:
-
-``` text
-Main/Event Thread
-│
-├── accept new connections
-├── read readiness
-├── parse protocol
-├── schedule work
-└── write readiness
-```
-
-Blocking work should not run directly in the event loop.
-
-For example:
-
-``` text
-Event loop
-    │
-    ├── request requires filesystem metadata
-    │
-    ▼
-Bounded worker queue
-    │
-    ▼
-Worker thread
-    │
-    ▼
-Result
-    │
-    ▼
-Event loop
-```
-
-The worker pool must be bounded.
-
-Do not create one thread per request.
-
-## 5. Socket Lifecycle
-
-The listening socket lifecycle:
-
-``` text
-socket()
-   ↓
-setsockopt()
-   ↓
-bind()
-   ↓
-listen()
-   ↓
-non-blocking
-   ↓
-epoll_ctl(ADD)
-   ↓
-epoll_wait()
-   ↓
-accept4()
-   ↓
-new connection
-```
-
-The Linux `accept(2)` contract matters: the returned descriptor is a new
-connected socket and should have the required flags configured
-explicitly.
-
-Use RAII:
-
-``` text
-UniqueFd
-  owns fd
-  closes fd exactly once
-```
-
-No naked `close()` calls scattered through business logic.
-
-## 6. Connection State Machine
-
-A connection should have explicit state.
-
-Example:
-
-``` text
-             ┌───────────────┐
-             │     OPEN      │
-             └───────┬───────┘
-                     │
-                     ▼
-             ┌───────────────┐
-             │ READING_HEAD  │
-             └───────┬───────┘
-                     │ headers complete
-                     ▼
-             ┌───────────────┐
-             │ READING_BODY  │
-             └───────┬───────┘
-                     │ body complete
-                     ▼
-             ┌───────────────┐
-             │  DISPATCHING  │
-             └───────┬───────┘
-                     │
-                     ▼
-             ┌───────────────┐
-             │ WRITING       │
-             └───────┬───────┘
-                     │ response complete
-                     ▼
-             ┌─────────────────────┐
-             │ keep-alive?         │
-             └───────┬─────────────┘
-                 yes  │  no
-                      │
-              ┌───────┴───────┐
-              ▼               ▼
-          READ_NEXT          CLOSE
-```
-
-This avoids hidden control flow.
-
-## 7. HTTP Parser Design
-
-The parser should operate on bytes.
-
-RFC 9112 explicitly describes HTTP/1.1 messages as a start-line followed
-by CRLF-delimited fields and an optional body. It also specifies message
-framing and warns about ambiguous parsing.
-
-Do not build the parser around arbitrary "split string" operations.
-
-Recommended conceptual API:
-
-``` text
-Parser
- ├── feed(bytes)
- ├── state()
- ├── request_complete()
- ├── error()
- └── take_request()
-```
-
-Parser states:
-
-``` text
-RequestLine
-Headers
-Body
-Complete
-Error
-```
-
-### Request-line
-
-Example:
-
-``` text
-GET /index.html HTTP/1.1
-```
-
-Parse:
-
-``` text
-method
-target
-version
-```
-
-### Headers
-
-Store normalized field names while preserving values according to the
-project's chosen representation.
-
-Enforce:
-
--   maximum header count
--   maximum field-name length
--   maximum field-value length
--   maximum total header bytes
--   no invalid whitespace between field name and colon
--   no obsolete line folding acceptance unless explicitly implemented
-
-### Body framing
-
-Initially support:
-
--   no body
--   `Content-Length`
-
-Treat `Transfer-Encoding` carefully and explicitly.
-
-Do not accept ambiguous combinations.
-
-RFC 9112 specifies that request body framing is controlled by
-`Content-Length` or `Transfer-Encoding`, and discusses the security
-implications of conflicting framing.
-
-## 8. HTTP Request Representation
-
-Suggested conceptual model:
-
-``` text
-Request
-├── method
-├── target
-├── version
-├── headers
-├── body
-└── connection_policy
-```
-
-Avoid storing redundant parsed values unless they improve performance
-measurably.
-
-## 9. HTTP Response Representation
-
-``` text
-Response
-├── status
-├── headers
-├── body
-├── content_length
-└── connection_policy
-```
-
-Serializer:
-
-``` text
-HTTP/1.1 200 OK\r\n
-Content-Type: text/plain\r\n
-Content-Length: 18\r\n
-Connection: keep-alive\r\n
-\r\n
-Hello from Aevrix!
-```
-
-The response serializer should own correctness for:
-
--   status line
--   CRLF
--   headers
--   body framing
--   connection semantics
-
-## 10. Routing
-
-Initial router:
-
-``` text
-GET /
-GET /health
-GET /static/*
-```
-
-Later:
-
-``` text
-GET /users/:id
-POST /users
-```
-
-Do not build a complicated routing DSL at the beginning.
-
-The router should receive a parsed request and produce a handler
-decision.
-
-## 11. Static File Architecture
-
-The static-file path is security-sensitive.
-
-``` text
-HTTP target
-     │
-     ▼
-Validate target
-     │
-     ▼
-Normalize URL path
-     │
-     ▼
-Reject traversal/invalid forms
-     │
-     ▼
-Map inside configured document root
-     │
-     ▼
-Open file safely
-     │
-     ▼
-Determine metadata
-     │
-     ▼
-Build response
-```
-
-Never concatenate an untrusted URL directly into a filesystem path.
-
-OWASP documents path traversal as a class of attacks that can escape an
-intended web root and access unauthorized files.
-
-The design should also decide how symlinks are handled. A secure default
-is preferable to silently following a symlink outside the configured
-root.
-
-## 12. MIME Types
-
-Start with a small table:
-
-``` text
-.html  text/html
-.css   text/css
-.js    text/javascript
-.json  application/json
-.txt   text/plain
-.svg   image/svg+xml
-.png   image/png
-.jpg   image/jpeg
-.webp  image/webp
-.ico   image/x-icon
-```
-
-Unknown extensions:
-
-``` text
-application/octet-stream
-```
-
-Do not infer MIME type from user-controlled content unless the behavior
-is explicitly designed.
-
-## 13. Keep-Alive
-
-HTTP/1.1 commonly reuses connections.
-
-Therefore:
-
-``` text
-connection
-   │
-   ├── request 1
-   │      ↓
-   │   response 1
-   │
-   ├── request 2
-   │      ↓
-   │   response 2
-   │
-   └── close
-```
-
-The parser must reset request state without destroying the underlying
-connection.
-
-Every connection needs a timeout policy.
-
-## 14. Output Buffering
-
-Do not assume one `send()` sends the entire response.
-
-Conceptually:
-
-``` text
-Response
-   ↓
-serialized bytes
-   ↓
-output buffer
-   ↓
-send()
-   ↓
-partial write?
-   ├── yes → retain remainder
-   └── no  → complete
-```
-
-When the output buffer is non-empty, the event loop should monitor
-writability.
-
-## 15. Backpressure
-
-Aevrix must never allow a slow client to consume unlimited memory.
-
-Define:
-
--   maximum input buffer
--   maximum output buffer
--   maximum body size
--   maximum concurrent connections
--   maximum queued filesystem jobs
-
-If a client exceeds a limit:
-
-``` text
-400 Bad Request
-413 Content Too Large
-408 Request Timeout
-429 Too Many Requests
-503 Service Unavailable
-```
-
-Use each response only when its semantics are appropriate.
-
-## 16. Timeouts
-
-At minimum:
-
-``` text
-header_read_timeout
-body_read_timeout
-keep_alive_timeout
-write_timeout
-```
-
-Timers should be integrated with the event system rather than
-implemented through arbitrary sleeping threads.
-
-## 17. Observability
-
-Structured logs should contain:
-
-``` text
-timestamp
-request_id
-remote_address
-method
-target
-status
-bytes_in
-bytes_out
-duration
-connection_id
-```
-
-Avoid logging secrets or full request bodies by default.
-
-Example:
-
-``` text
-2026-09-23T21:00:04Z
-conn=42
-req=8
-method=GET
-target=/
-status=200
-bytes_out=1254
-duration_us=312
-```
-
-## 18. Metrics
-
-Initial metrics:
-
-``` text
-aevrix_connections_total
-aevrix_connections_active
-aevrix_requests_total
-aevrix_responses_2xx
-aevrix_responses_4xx
-aevrix_responses_5xx
-aevrix_bytes_received
-aevrix_bytes_sent
-aevrix_request_duration
-aevrix_parser_errors
-aevrix_open_fds
-```
-
-A `/metrics` endpoint can be added later.
-
-## 19. Configuration
-
-Recommended initial configuration:
-
-``` toml
-[server]
-host = "127.0.0.1"
-port = 8080
-workers = 2
-
-[http]
-keep_alive = true
-max_header_bytes = 16384
-max_body_bytes = 1048576
-header_timeout_ms = 5000
-keep_alive_timeout_ms = 5000
-
-[static]
-root = "./public"
-directory_listing = false
-
-[logging]
-level = "info"
-access_log = true
-```
-
-The exact configuration format can change. The important architectural
-requirement is that configuration be represented by a typed C++
-structure after parsing.
-
-### 19.1 WebSocket Upgrade (Phase 23, RFC 6455)
-
-WebSocket is a transport switch negotiated through HTTP, not a part of
-the HTTP parser. After a successful `101 Switching Protocols` response
-the connection leaves the request/response cycle and enters frame mode:
-
-``` text
-HTTP Upgrade request
-     ↓
-evaluate_upgrade() (path allowlist, Upgrade/Connection tokens,
-                    version 13, Sec-WebSocket-Key, Origin allowlist)
-     ↓
-101 Switching Protocols  →  Connection::begin_websocket()
-     ↓
-WebSocketConnection::feed() / take_output() (RFC 6455 framing)
-```
-
-Rules that keep the layers separate:
-
-- The HTTP request parser is never modified for WebSocket; the upgrade
-  decision reads the already-parsed `HttpRequest` (`aevrix/ws/`
-  handshake module).
-- Frame parsing/serialization (`FrameParser`, `encode_frame`) is an
-  independent layer activated only after the handshake succeeds.
-- `WebSocketConnection` owns sequencing policy (masking requirement,
-  fragmentation reassembly, Ping/Pong/Close, UTF-8 and size limits,
-  close handshake) and performs no socket I/O itself: the event loop
-  feeds bytes in and drains serialized frames through the existing
-  nonblocking (and TLS, for `wss://`) write paths.
-- Timeouts still apply: established sessions are bounded by the
-  keep-alive deadline; half-closed sessions by the close timeout.
-- Configuration is opt-in (`websocket_enabled`, `websocket_paths`,
-  `websocket_max_message_bytes`, `websocket_close_timeout_ms`,
-  `websocket_ping_interval_ms`, `websocket_allowed_origins`).
-- Echo behavior is the built-in application policy: text/binary
-  messages are echoed, Ping is answered with Pong, Close is echoed and
-  the TCP connection drops once both Close frames exchanged.
-
-### 19.2 Configuration Reload (Phase 24)
-
-Reloads are copy-on-write, never in-place mutation. A reload parses and
-validates a candidate `ServerConfig` off to the side and publishes it
-with one atomic `std::shared_ptr<const ServerConfig>` store
-(`ServerConfigStore`). Readers hold snapshots, so an in-flight request
-keeps the generation it started with while later requests see the new
-one; a bad candidate is rejected and the live generation is untouched.
-
-``` text
-SIGHUP or POST /admin/reload-config
-     ↓
-parse candidate file (or ?path= override inside the config dir)
-     ↓
-validate (ranges, TLS material, document root)
-     ↓
-atomic shared_ptr swap + generation++ (ServerConfigStore::publish)
-     ↓
-log applied keys, hot keys, and restart-required keys
-```
-
-Rules that keep the reload safe:
-
-- The SIGHUP handler is signal-safe: it only flips an atomic flag and
-  writes to an eventfd the epoll loop already polls. All parsing,
-  validation, and the swap happen on the event-loop thread.
-- Hot vs restart-required is a property of *where a value is read*.
-  Values read per request/tick from a fresh snapshot (timeouts,
-  `max_connections`, `log_level`, `admin_api_enabled`) apply
-  immediately; values captured once at startup (`host`, `port`,
-  `workers`, TLS contexts/files, proxy routing targets) are logged as
-  needing a restart while the running values stay unchanged.
-- The admin surface is opt-in (`admin_api_enabled`, default off, 404
-  when disabled) and token-protected (`admin_token` via
-  `Authorization: Bearer` or `X-Aevrix-Token`, constant-time compare).
-  `GET /admin/config` masks the token; `POST /admin/reload-config`
-  only accepts absolute `?path=` overrides inside the configured
-  file's directory (no `..`), otherwise 400.
-
-## 20. Graceful Shutdown
-
-Shutdown sequence:
-
-``` text
-signal received
-     ↓
-stop accepting new connections
-     ↓
-stop scheduling new work
-     ↓
-finish safe in-flight responses
-     ↓
-close remaining connections
-     ↓
-stop workers
-     ↓
-flush logs
-     ↓
-exit
-```
-
-Never rely on `kill -9` as the normal shutdown mechanism.
-
-## 21. Error Boundaries
-
-Errors should be classified:
-
-``` text
-Network error
-Protocol error
-Application error
-Filesystem error
-Configuration error
-Internal invariant violation
-```
-
-Do not convert every internal failure into a generic `500` without
-logging the underlying reason.
-
-Do not leak internal filesystem paths to clients.
-
-## 22. Suggested Source Layout
-
-``` text
-aevrix/
-├── CMakeLists.txt
-├── CMakePresets.json
-├── README.md
-├── LICENSE
-├── SECURITY.md
-├── CONTRIBUTING.md
-├── CHANGELOG.md
-│
-├── docs/
-│   ├── MASTER_STRATEGY.md
-│   ├── ARCHITECTURE.md
-│   ├── IMPLEMENTATION_ROADMAP.md
-│   ├── decisions/
-│   ├── protocol/
-│   ├── security/
-│   └── benchmarks/
-│
-├── include/aevrix/
-│   ├── net/
-│   ├── http/
-│   ├── runtime/
-│   ├── routing/
-│   ├── static/
-│   ├── config/
-│   └── observability/
-│
-├── src/
-│   ├── net/
-│   ├── http/
-│   ├── runtime/
-│   ├── routing/
-│   ├── static/
-│   ├── config/
-│   └── observability/
-│
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   ├── protocol/
-│   ├── security/
-│   └── fixtures/
-│
-├── benchmarks/
-│
-├── examples/
-│
-└── public/
-    └── index.html
-```
-
-## 23. Dependency Policy
-
-Prefer the C++ standard library and POSIX/Linux APIs for the core.
-
-External libraries should be added only when they solve a clearly
-defined problem.
-
-Good candidates later:
-
--   TLS library
--   benchmark framework
--   test framework if the project outgrows simple CTest executables
--   compression library
-
-Do not import a complete web framework. The point of Aevrix is to
-implement the server.
-
-## 24. Testing Architecture
-
-### Unit tests
-
-Test:
-
-``` text
-HTTP parser
-header map
-status codes
-serializer
-router
-path normalization
-MIME detection
-configuration parsing
-```
-
-### Integration tests
-
-Start the real server and test:
-
-``` text
-GET /
-GET missing file
-HEAD /
-keep-alive
-multiple requests
-malformed request
-large headers
-timeouts
-concurrent connections
-```
-
-### Security tests
-
-Test:
-
-``` text
-../
-..%2f
-encoded traversal
-absolute paths
-double encoding
-NUL-like input handling
-oversized headers
-oversized bodies
-conflicting framing
-invalid header syntax
-slow clients
-```
-
-## 25. Performance Architecture
-
-Do not optimize everything immediately.
-
-Measure:
-
-``` text
-baseline blocking server
-        ↓
-threaded server
-        ↓
-non-blocking event loop
-        ↓
-buffer optimizations
-        ↓
-filesystem optimizations
-        ↓
-advanced concurrency
-```
-
-This produces a useful engineering narrative and makes performance
-changes attributable.
-
-## 26. Architectural Invariants
-
-These should become permanent rules:
-
-1.  Event loop never performs unbounded blocking work.
-2.  No connection owns another connection.
-3.  Every file descriptor has one clear owner.
-4.  Parser never reads beyond configured limits.
-5.  Response framing is determined centrally.
-6.  Static file access is confined to the configured root.
-7.  Shutdown is explicit and ordered.
-8.  Worker queues are bounded.
-9.  Metrics/logging cannot crash the server.
-10. Every protocol bug gets a regression test.
+## Components
+
+- `TcpListener` (`tcp_listener.{h,cpp}`): socket, `SO_REUSEADDR`, bind, listen
+  with backlog 128, blocking accept at startup then non-blocking accept from
+  the loop. A second instance serves `tls_port` when TLS is enabled.
+- `EventLoop` (`event_loop.{h,cpp}`): epoll wrapper. `add_fd(fd, events,
+  callback)`, `modify_fd`, `remove_fd`, and `run(timeout_ms)`, which the main
+  loop calls with a 1 s tick.
+- `ConnectionManager` (`connection_manager.{h,cpp}`): `fd -> Connection` map,
+  lookup by connection id, `sweep_timeouts()`, WebSocket maintenance and
+  shutdown fan-out, and the `max_connections` check at accept time.
+- `Connection` (`connection.{h,cpp}`): per-connection state: sockets, input
+  buffer, parser, output buffer, read/write state, deadline, keep-alive flag,
+  optional `TlsConnection` and `WebSocketConnection`.
+- `HttpRequestParser` (`http_request_parser.{h,cpp}`): incremental request-line,
+  header and body parsing with its own fixed limits.
+- `Router` (`router.{h,cpp}`): `(METHOD, target) -> handler` map, exact match,
+  case-insensitive method.
+- `StaticFileServer` (`static_file_server.{h,cpp}`): URL decode, resolve, path
+  containment check, MIME lookup by extension, file read.
+- `WorkerPool` (`worker_pool.h`), `FilesystemWorker` (`filesystem_worker.cpp`),
+  `WorkerCompletionHandler` (`worker_completion_handler.{h,cpp}`): bounded
+  queue (128 jobs), `workers` threads, results returned over an eventfd.
+- `ProxyHandler` (`proxy_handler.{h,cpp}`), `UpstreamPool` (`upstream_pool.*`),
+  `ProxyTarget` (`proxy_target.*`), `ProxyRequestBuilder`
+  (`proxy_request_builder.*`), `ProxyResponseParser`
+  (`proxy_response_parser.*`): forwarding, connection reuse, framing checks.
+- `WebSocketHandshake` (`websocket_handshake.*`) and `WebSocketFrame`,
+  `WebSocketConnection` (`websocket_*.cpp`): upgrade validation and the frame
+  layer that takes over the connection after 101.
+- `ServerConfig`, `ConfigParser`, `ServerConfigStore`: configuration and the
+  atomic generation store described below.
+- `Logger` (structured lines), `SignalHandler` (SIGINT/SIGTERM/SIGHUP),
+  `Metrics`/`observability` (present, not wired into the server).
+
+## Threading
+
+The event-loop thread runs `main`: accepts, reads, writes, parses, routes,
+talks to upstreams, TLS handshakes, WebSocket frames, timeouts and configuration
+reloads all happen there, and nothing in that path blocks.
+
+Blocking work is the file read behind static serving. A read event that reaches
+the static path copies what the worker needs (connection id, target, document
+root, HEAD flag) into a `WorkerTask`, marks the connection worker-active (which
+suspends its deadline) and submits the job, then returns to epoll immediately. A
+pooled thread runs `StaticFileServer::serve_file` on its own copy of the task,
+pushes the result to a completion queue and writes to an eventfd the loop
+watches. The loop looks the connection up by id, clears the worker flag,
+refreshes the deadline and writes the response. Workers never see a socket, a
+`Connection`, TLS state or WebSocket state.
+
+Signals are handled the same way: the handler sets a flag and writes to an
+eventfd, and the loop performs the work. SIGHUP means reload, SIGINT/SIGTERM
+mean graceful shutdown (stop accepting, notify WebSocket peers, drain, stop
+workers, exit).
+
+## Request dispatch
+
+For a complete request the loop tries, in order, and stops at the first match:
+
+1. `Router` — exact `(method, target)` match, so a query string misses the
+route.
+2. WebSocket upgrade — only when `websocket_enabled` and the request's path
+component is in `websocket_paths`. An upgrade attempt on an allowlisted path
+that fails validation is answered with 400, 403 or 426 and the connection is
+closed; a valid one answers 101 and switches the connection to frame mode.
+3. `ProxyHandler` — when `proxy_enabled` and the path component matches
+`proxy_prefix`.
+4. `WorkerPool` — everything else: static file from `document_root`.
+
+Errors along the way close the connection rather than leaving a half-written
+exchange: an unparsable request, a serialization failure, an fs error from the
+worker, or a proxy exchange that produced no client response.
+
+## Connection lifecycle
+
+`ConnectionState` moves `New -> (TlsHandshake) -> Reading -> Writing ->
+Waiting -> Closing/Closed`. An upgraded connection leaves that ladder and stays
+in frame mode until the close handshake completes.
+
+The timeout budget comes from the state and is reset whenever bytes move:
+header budget while reading headers (and during the TLS handshake), body budget
+while reading a body, write budget while flushing, keep-alive budget while
+idle, WebSocket close budget during a close handshake. A connection with a
+worker job in flight has no deadline until the result arrives. The loop sweeps
+`has_deadline_exceeded()` once per second and drops expired connections.
+
+## Configuration reload
+
+`ServerConfigStore` holds `shared_ptr<const ServerConfig>`. Every event takes a
+snapshot; `publish()` swaps the pointer and increments a generation counter, so
+a request that started under generation N keeps seeing N while a reload lands.
+
+`try_reload()` parses and validates a candidate file. A rejection leaves the
+active generation untouched and records the reason (`/admin/config` reports it).
+On success the changed keys are classified: `host`, `port`, `workers`, the
+`tls_*` identity, and `proxy_enabled`/`proxy_pass`/`proxy_prefix` need a restart
+and only get a warning, everything else is logged as applied. Two values are
+pushed because the objects holding them outlive a snapshot: the log level, and
+the upstream pool's idle/timeout bounds. The rest are pulled per event from the
+snapshot, including `document_root` and all `websocket_*` settings.
+
+SIGHUP, `POST /admin/reload-config` and the 1 s maintenance tick all call the
+same reload entry point on the loop thread, so a reload never races with the
+request path.
+
+## Invariants
+
+- One owner per descriptor. `UniqueFd` and `Connection` close it; a descriptor
+  is removed from epoll before the owner is destroyed.
+- Every socket handled by the loop is non-blocking. Partial reads and writes
+  keep the remaining bytes in the buffers and re-arm the interest mask.
+- Only the loop thread touches `Connection`, TLS and WebSocket objects.
+- Configuration is read as an immutable snapshot; no lock is held across I/O,
+  and a rejected reload never publishes a partial file.
+- Static paths are decoded, resolved and confirmed to stay inside
+  `document_root` before the file is opened, so `..`, encoded variants,
+  absolute paths and symlinks that leave the root are refused.
+- Proxy framing is regenerated rather than forwarded: hop-by-hop headers are
+  stripped in both directions, `Content-Length` is recomputed for the client,
+  and an upstream response that mixes `Content-Length` with
+  `Transfer-Encoding`, malformed chunked framing, a body over
+  `proxy_max_response_bytes` or a truncated body is treated as a failure.
+- WebSocket frames are validated before allocation: RSV bits and reserved
+  opcodes are rejected, client frames must be masked, control frames must be
+  short and unfragmented, and a declared payload over
+  `websocket_max_message_bytes` is refused.
+- The admin routes stay invisible (404) unless `admin_api_enabled` is true, and
+  a configured token is compared without early exit.
