@@ -7,6 +7,12 @@ All notable changes to Aevrix, in the format of
 ## [Unreleased]
 
 ### Fixed
+- The TLS integration suite generates its test key pair with the OpenSSL API
+  instead of shelling out to the `openssl` CLI. The old helper discarded the
+  result of `system()`, which GCC rejects at `-O3` with `_FORTIFY_SOURCE` and
+  `-Werror`, failing the Release build on runners that enable fortify by
+  default. Every return value is now checked, and the suite no longer needs
+  the `openssl` binary installed.
 - GoogleTest is now provided by CMake: `find_package(GTest)` first, then a
   pinned FetchContent build of googletest v1.15.2. The TLS suites build on
   runners without `libgtest-dev`. Escape hatches: `-DAEVRIX_FETCH_GTEST=OFF`,
