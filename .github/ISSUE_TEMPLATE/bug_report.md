@@ -1,48 +1,40 @@
 ---
 name: Bug report
-about: Report a reproducible problem with Aevrix
+about: A reproducible problem in Aevrix
 title: "fix: "
 labels: bug
-assignees: ""
 ---
 
-## Description
+## What happens
 
-A clear, concise description of the bug.
+One paragraph: what you did, what you expected, what happened instead.
 
-## Version / Environment
+## Environment
 
 - Aevrix version or commit SHA:
-- Build mode (Debug/Release) and TLS (`ENABLE_TLS=ON/OFF`):
-- OS / compiler (`g++ --version`, `cmake --version`):
-- OpenSSL version (if TLS involved):
+- Build: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug|Release`, `ENABLE_TLS=ON|OFF`:
+- OS and compiler (`uname -a`, `g++ --version`):
+- Command line (`./build/aevrix --config <file>`, or `--root <path>`):
 
-## Configuration (redacted)
+## Configuration
 
-Paste the relevant `aevrix.conf` keys. **Strip `admin_token`, key paths, and secrets.**
+The relevant keys from `aevrix.conf`, with `admin_token` and key paths removed:
 
 ```ini
 host =
 port =
-# ...
+document_root =
 ```
 
-## Steps to Reproduce
+## Steps
 
 1.
 2.
 3.
 
-## Expected Behaviour
+## Logs
 
-What you expected to happen.
+Relevant lines with `log_level = debug`, secrets removed.
 
-## Actual Behaviour
-
-What happened instead (status codes, logs, crashes). Paste logs with `--log-level debug` if possible, redacted.
-
-## Checklist
-
-- [ ] I reproduced this on the latest `main` or a tagged release.
-- [ ] I redacted tokens, keys, and secrets.
-- [ ] I included a minimal repro (config + request).
+- [ ] Reproduced on the latest `main` or a tagged release
+- [ ] Checked that it is not listed as a known limitation in `SECURITY.md` or `docs/HTTP.md`

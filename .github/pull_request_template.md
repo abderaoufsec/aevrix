@@ -1,47 +1,22 @@
-## Description
+## What
 
-What does this PR change and why? Link related issues (`Fixes #...`).
-
-## Type of Change
-
-- [ ] Bug fix
-- [ ] Feature
-- [ ] Documentation
-- [ ] Test / CI
-- [ ] Refactor / chore
+One or two sentences on what changed and why. Link issues (`Fixes #12`).
 
 ## Testing
 
-Commands run and results (paste ctest/smoke summary):
+Commands you ran and what they printed:
 
 ```text
 ctest --test-dir build --output-on-failure
-...
 bash tests/smoke/run_all.sh
-...
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
 ```
 
-- [ ] `ctest` green (TLS-ON; TLS-OFF if TLS-gated code touched)
-- [ ] Smoke suite green (if runtime behaviour changed)
-- [ ] Sanitizer run (asan/ubsan/tsan) for parser/network/threading changes
+- [ ] CTest green, plus a `-DENABLE_TLS=OFF` build if TLS-gated code changed
+- [ ] Smoke suite green if runtime behaviour changed
+- [ ] Sanitizer run if the change touches memory, parsing or threads
 
-## Documentation
+## Notes
 
-- [ ] `README.md` / `docs/*.md` updated (if user-visible)
-- [ ] `CHANGELOG.md` entry under `[Unreleased]`
-- [ ] `aevrix.conf` sample updated (if config keys changed)
-
-## Breaking Changes
-
-None / describe migration:
-
-## Security Considerations
-
-Parser/TLS/proxy/WebSocket/path/auth impact, negative tests added:
-
-## Checklist
-
-- [ ] Small, single-purpose PR; refactors separated from fixes
-- [ ] `.clang-format` clean, no new warnings (`-Werror`)
-- [ ] No secrets, keys, or tokens committed
-- [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md)
+New or changed configuration keys, docs that needed updating, breaking changes,
+and any security impact (framing, paths, limits, auth, origins).

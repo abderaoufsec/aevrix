@@ -82,4 +82,5 @@ jobs:
             See CHANGELOG.md for breaking changes, new features, and migration notes.
             Verify artifacts with `sha256sum -c SHA256SUMS.txt`.
 
-            Known limitations are listed in SECURITY.md and docs/TLS.md.
+            Known limitations are listed in SECURITY.md, and HTTP framing
+            deviations in docs/HTTP.md.
