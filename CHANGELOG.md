@@ -1,112 +1,60 @@
 # Changelog
 
-All notable changes to Aevrix are documented in this file. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Aevrix, in the format of
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), following
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Fixed
-- CI: TLS test suites no longer fail with `gtest/gtest.h: No such file or
-  directory`. `CMakeLists.txt` now tries `find_package(GTest)` and falls back
-  to a pinned FetchContent build of googletest v1.15.2, so the `GTest::GTest` /
-  `GTest::Main` targets exist on GitHub-hosted runners and clean checkouts
-  without installing `libgtest-dev`. Opt out with
-  `-DAEVRIX_FETCH_GTEST=OFF` (system GTest only) or
-  `-DAEVRIX_USE_SYSTEM_GTEST=OFF` (always use the fetched copy).
-- Release builds: `NDEBUG` is now undefined for test targets (`-UNDEBUG`) so
-  `<cassert>` checks keep running under `-O3`. Previously the Release build
-  failed under `-Werror` (`unused variable`, `used uninitialized`) because
-  assert-only variables were compiled out — and the assertions themselves were
-  silently disabled in Release runs. The `aevrix` server binary still builds
-  with `NDEBUG`.
+- GoogleTest is now provided by CMake: `find_package(GTest)` first, then a
+  pinned FetchContent build of googletest v1.15.2. The TLS suites build on
+  runners without `libgtest-dev`. Escape hatches: `-DAEVRIX_FETCH_GTEST=OFF`,
+  `-DAEVRIX_USE_SYSTEM_GTEST=OFF`.
+- Release builds define `NDEBUG` only for the server: test targets get
+  `-UNDEBUG`, so `<cassert>` checks still run under `-O3` and the Release build
+  no longer fails on assert-only variables under `-Werror`.
 
 ### Changed
-- CI workflow reorganized into three jobs: `build-and-test` (TLS ON, Debug and
-  Release presets), `build-notls` (`-DENABLE_TLS=OFF`), and a `sanitizers`
-  matrix (AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer).
-  `workflow_dispatch` was added for manual runs, and `libssl-dev`/`openssl`
-  are installed explicitly.
-- Docs: `docs/TESTING.md` documents the GoogleTest bootstrap, the `-UNDEBUG`
-  test rule, and current preset commands; `CONTRIBUTING.md` mirrors the
-  expanded CI gate.
+- Documentation rewritten against the code: added `docs/HTTP.md` and
+  `docs/CONFIGURATION.md`; `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`,
+  `docs/OBSERVABILITY.md`, `docs/TESTING.md`, `docs/BENCHMARKS.md`, `README.md`,
+  `SECURITY.md` and `CONTRIBUTING.md` shortened and corrected; TLS, sanitizer,
+  coding-style and HTTP-correctness notes folded into the files above.
+- CI runs `build-and-test` (Debug and Release presets), a TLS-off build and an
+  ASan/UBSan/TSan matrix; the release workflow installs the `openssl` CLI.
+- Issue templates tightened; a bug template that named a `--log-level` flag the
+  server does not have was replaced with the real flags and keys; blank issues
+  are disabled via `config.yml`.
 
 ## [1.0.0] - 2026-09-30
 
-Stable v1.0.0 release. Definition of Done verified: 20/20 CTest (TLS-ON),
-17/17 (TLS-OFF), ASan/UBSan/TSan clean, 6/6 smoke scripts (proxy, WebSocket,
-reload). Release engineering: SECURITY.md, CONTRIBUTING.md, CHANGELOG.md,
-CODE_OF_CONDUCT.md, DEPLOYMENT.md, GitHub issue/PR templates, release
-workflow. Project version bumped to 1.0.0 (CMake, `Server: Aevrix/1.0.0`,
-`/server-info`). TSan race fixed in upstream-pool test listener.
-
-First stable release: a complete, tested HTTP/1.1 server in C++20.
-
 ### Added
-- Event-driven HTTP/1.1 core: non-blocking epoll loop, explicit connection
-  state machine, incremental request parser, response/output state machine,
-  keep-alive, bounded worker pool for filesystem work.
-- Static file serving with MIME detection, path normalization, traversal
-  protection, conditional requests (ETag, Last-Modified, If-None-Match,
-  If-Modified-Since), Range requests, HTTP cache.
-- Observability: structured logging (connection/request IDs, levels), metrics
-  collection, `GET /metrics` (Prometheus text), `GET /health`,
-  `GET /server-info`.
-- Validated `ServerConfig` + `aevrix.conf` sample (`host`, `port`, `workers`,
-  timeouts, limits, TLS, proxy, WebSocket, admin, log level).
-- TLS/HTTPS via OpenSSL (Phase 21): non-blocking handshake/read/write,
-  TLS 1.2 minimum, `tls_*` config, unit + integration tests,
-  `docs/TLS.md` (`-DENABLE_TLS=ON/OFF`).
-- Reverse proxy (Phase 22): request forwarding, connection pooling
-  (`UpstreamPool`), timeouts, failure mapping (502/504), X-Forwarded-*
-  headers, chunked re-framing, smuggling rejection, `proxy_*` config, smoke
-  harness (`mock_upstream.py`, `proxy.conf`, `smoke1-4.sh`).
-- WebSocket upgrade RFC 6455 (Phase 23): handshake validation (key/accept,
-  version 13, Connection token, path/origin allowlists), framing
-  (FIN/RSV/opcode/mask, 7/16/64-bit lengths), fragmentation reassembly,
-  Ping/Pong/Close echo policy, UTF-8 + size limits, `wss://` via TLS,
-  timeouts, `websocket_*` config, `ws.conf` + `ws_client.py` + `smoke_ws.sh`.
-- Atomic configuration reload (Phase 24): copy-on-write `ServerConfigStore`
-  (atomic `shared_ptr` swap, snapshot generations), SIGHUP via signal-safe
-  flag + eventfd wake-up, token-protected `GET /admin/config` (token masked)
-  and `POST /admin/reload-config` (same-directory `?path=` guard), hot vs
-  restart-required classification with logging, `admin_api_enabled` /
-  `admin_token` config, unit + smoke coverage (`smoke_reload.sh`).
-- Timeouts and resource limits: header/body/keep-alive/write timeouts,
-  `max_connections`, `max_buffer_size`, `max_request_body`, graceful
-  SIGINT/SIGTERM shutdown.
-- Test pyramid: 20 CTest suites (parser, router, cache, metrics, connections,
-  timeouts, path security, proxy, upstream pool, WebSocket, TLS, config
-  reload) plus live smoke scripts (`tests/smoke/run_all.sh`).
-- Benchmark harness (`benchmarks/`, `docs/BENCHMARKS.md`), sanitizer presets
-  (ASan/UBSan/TSan, `docs/SANITIZERS.md`), `.clang-format` style config.
+- Event-driven HTTP/1.1 core on epoll: incremental request parser, connection
+  and write state machines, keep-alive, bounded worker pool for filesystem
+  work, graceful shutdown on SIGINT/SIGTERM.
+- Static file serving with MIME detection, document-root confinement and
+  traversal protection.
+- TLS through OpenSSL on its own listener, with a `tls_*` configuration set and
+  unit and integration suites.
+- Reverse proxy to `http://` upstreams with connection pooling, timeouts,
+  `X-Forwarded-*`, regenerated framing and refusal of ambiguous upstream
+  responses.
+- RFC 6455 WebSocket upgrade: handshake validation, path and origin allowlists,
+  frame parsing, fragmentation, Ping/Pong/Close handling, size limits.
+- Atomic configuration reload through `ServerConfigStore`: SIGHUP, the
+  opt-in admin routes, and a hot-versus-restart classification per key.
+- Structured logging with connection and request identifiers, a log-level
+  setting, and a validated `ServerConfig` with a sample `aevrix.conf`.
+- Test surface: 20 CTest suites (17 without TLS), six live smoke scripts and
+  sanitizer presets.
 
-### Fixed
-- Windows/MinGW build compatibility (sign-conversion scoping, presets).
-- Double-encoded path traversal handled without exceptions; `validate_path()`
-  returns proper HTTP status codes.
-- TLS event-loop integration: WANT_READ/WANT_WRITE epoll interest, timeout
-  budgets, shutdown Close handling.
-
-### Security
-- Documented in SECURITY.md: traversal protection, strict framing rejection
-  (CL/TE conflicts, smuggling), size/time limits, TLS 1.2+ only, WebSocket
-  masking + origin allowlist, token-protected admin surface, no secrets in
-  logs, coordinated disclosure policy.
-
-## History (pre-1.0 development)
-
-Key milestones on the way to v1.0 (see `git log` for the full sequence):
-
-- `v0.1.0 TCP + hard-coded HTTP` — TCP listener, RAII fd ownership
-  (`docs/IMPLEMENTATION_ROADMAP.md`).
-- Stages 1–7: non-blocking event-driven foundation, HTTP parser, response
-  state machine, WorkerPool, timeout enforcement, static-file security audit.
-- Phase 14: structured logging. Phase 15: graceful shutdown. Phase 16: test
-  pyramid. Phase 19: HTTP correctness (ETag, cache, ranges). Phase 20:
-  observability (metrics, `/metrics`, `/health`).
-- Phase 21: TLS/HTTPS. Phase 22: reverse proxy. Phase 23: WebSocket upgrade.
-  Phase 24: atomic configuration reload.
+### Notes
+- `GET /metrics` is a placeholder, the metrics collector is not wired into the
+  server, and `/server-info` is not registered. ETag, Last-Modified, Range and
+  conditional requests exist as tested library helpers but are not applied to
+  static responses. Request framing is more permissive than RFC 9112 allows;
+  `docs/HTTP.md` lists the deviations.
 
 [Unreleased]: https://github.com/abderaoufsec/aevrix/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/abderaoufsec/aevrix/releases/tag/v1.0.0
