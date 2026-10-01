@@ -2,8 +2,9 @@
  * @file tls_integration_tests.cpp
  * @brief Integration tests for TLS functionality
  *
- * These tests perform real HTTPS requests against the server with TLS enabled.
- * They require test certificates to be generated or provided.
+ * These tests exercise TlsContext and TlsConnection against real certificates.
+ * The test key pair is generated in-process with the OpenSSL API on first use,
+ * so the suite needs no certificate files and no openssl CLI.
  */
 
 #ifdef AEVRIX_ENABLE_TLS
@@ -19,6 +20,9 @@
 #include <fcntl.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <thread>
 #include <chrono>
 #include <fstream>
@@ -27,9 +31,97 @@
 namespace aevrix {
 namespace test {
 
-// Test certificate paths - these should be generated before running tests
+// Test certificate paths - generated into the working directory on first use
 const char* TEST_CERT_PATH = "test_cert.pem";
 const char* TEST_KEY_PATH = "test_key.pem";
+
+namespace {
+
+// The test key and certificate are produced with the OpenSSL API rather than by
+// shelling out to the openssl CLI: nothing external to install, no shell, and no
+// unchecked system() return value for -Werror to trip over at -O3.
+EVP_PKEY* generate_rsa_key() {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+    if (ctx == nullptr) {
+        return nullptr;
+    }
+
+    EVP_PKEY* key = nullptr;
+    if (EVP_PKEY_keygen_init(ctx) <= 0 || EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0 ||
+        EVP_PKEY_keygen(ctx, &key) <= 0) {
+        EVP_PKEY_free(key);
+        key = nullptr;
+    }
+
+    EVP_PKEY_CTX_free(ctx);
+    return key;
+}
+
+bool write_private_key(const std::string& path, EVP_PKEY* key) {
+    BIO* bio = BIO_new_file(path.c_str(), "wb");
+    if (bio == nullptr) {
+        return false;
+    }
+    const int written = PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr);
+    BIO_free_all(bio);
+    return written == 1;
+}
+
+bool write_certificate(const std::string& path, X509* cert) {
+    BIO* bio = BIO_new_file(path.c_str(), "wb");
+    if (bio == nullptr) {
+        return false;
+    }
+    const int written = PEM_write_bio_X509(bio, cert);
+    BIO_free_all(bio);
+    return written == 1;
+}
+
+/// Self-signed certificate for CN=localhost, valid for a year
+X509* self_signed_certificate(EVP_PKEY* key) {
+    X509* cert = X509_new();
+    if (cert == nullptr) {
+        return nullptr;
+    }
+
+    X509_set_version(cert, 2);  // X.509 v3
+    ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
+    X509_gmtime_adj(X509_getm_notBefore(cert), 0);
+    X509_gmtime_adj(X509_getm_notAfter(cert), 60L * 60 * 24 * 365);
+
+    if (X509_set_pubkey(cert, key) != 1) {
+        X509_free(cert);
+        return nullptr;
+    }
+
+    X509_NAME* name = X509_get_subject_name(cert);
+    if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                   reinterpret_cast<const unsigned char*>("localhost"), -1, -1,
+                                   0) != 1) {
+        X509_free(cert);
+        return nullptr;
+    }
+    X509_set_issuer_name(cert, name);
+
+    if (X509_sign(cert, key, EVP_sha256()) == 0) {
+        X509_free(cert);
+        return nullptr;
+    }
+    return cert;
+}
+
+}  // namespace
+
+// Generate a standalone private key (used for the mismatched-key case)
+bool generate_private_key(const std::string& path) {
+    EVP_PKEY* key = generate_rsa_key();
+    if (key == nullptr) {
+        return false;
+    }
+    const bool written = write_private_key(path, key);
+    EVP_PKEY_free(key);
+    return written;
+}
 
 // Helper function to generate test certificates
 bool generate_test_certificates() {
@@ -38,21 +130,23 @@ bool generate_test_certificates() {
         return true; // Already exist
     }
 
-    // Generate key
-    std::string key_cmd = "openssl genrsa -out " + std::string(TEST_KEY_PATH) + " 2048 2>/dev/null";
-    if (system(key_cmd.c_str()) != 0) {
+    EVP_PKEY* key = generate_rsa_key();
+    if (key == nullptr) {
         return false;
     }
 
-    // Generate self-signed certificate
-    std::string cert_cmd = "openssl req -new -x509 -key " + std::string(TEST_KEY_PATH) + 
-                          " -out " + std::string(TEST_CERT_PATH) + 
-                          " -days 365 -subj \"/CN=localhost\" 2>/dev/null";
-    if (system(cert_cmd.c_str()) != 0) {
+    X509* cert = self_signed_certificate(key);
+    if (cert == nullptr) {
+        EVP_PKEY_free(key);
         return false;
     }
 
-    return true;
+    const bool written = write_private_key(TEST_KEY_PATH, key) &&
+                         write_certificate(TEST_CERT_PATH, cert);
+
+    X509_free(cert);
+    EVP_PKEY_free(key);
+    return written;
 }
 
 // Helper function to clean up test certificates
@@ -112,8 +206,7 @@ TEST(TlsIntegrationTest, ContextCreationWithMismatchedKey) {
 
     // Generate a different key
     const char* wrong_key = "wrong_key.pem";
-    std::string key_cmd = "openssl genrsa -out " + std::string(wrong_key) + " 2048 2>/dev/null";
-    system(key_cmd.c_str());
+    ASSERT_TRUE(generate_private_key(wrong_key)) << "openssl key generation failed";
 
     try {
         TlsContext ctx;
